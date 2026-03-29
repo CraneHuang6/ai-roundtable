@@ -53,12 +53,14 @@
   setupResponseObserver();
 
   async function injectMessage(text) {
-    // ChatGPT uses a textarea or contenteditable div
+    // ChatGPT uses a contenteditable div (previously textarea, changed in 2025+)
     const inputSelectors = [
       '#prompt-textarea',
-      'textarea[data-id="root"]',
+      'div[contenteditable="true"]#prompt-textarea',
       'div[contenteditable="true"][data-placeholder]',
+      'textarea[data-id="root"]',
       'textarea[placeholder*="Message"]',
+      'div[contenteditable="true"][role="textbox"]',
       'textarea'
     ];
 
@@ -80,8 +82,9 @@
       inputEl.value = text;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
-      // Contenteditable div
-      inputEl.textContent = text;
+      // Contenteditable div (ChatGPT switched from textarea to contenteditable in 2025)
+      // Need to set innerHTML with <p> tags for proper React state update
+      inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
@@ -276,35 +279,68 @@
   }
 
   function getLatestResponse() {
-    // Find all assistant messages and get the last one
-    // ChatGPT UI changes frequently, so we try multiple selectors
-    const messageSelectors = [
-      '[data-message-author-role="assistant"] .markdown',
-      '[data-message-author-role="assistant"] [class*="markdown"]',
+    // Strategy: find the assistant message container first, then extract ALL text content
+    // This handles ChatGPT's evolving UI where content may be in .markdown, canvas boxes,
+    // code blocks, or other nested containers
+
+    // Step 1: Find all assistant message containers
+    const containerSelectors = [
       '[data-message-author-role="assistant"]',
-      '.agent-turn .markdown',
-      '[class*="agent-turn"] .markdown',
-      '[data-testid*="conversation-turn"]:has([data-message-author-role="assistant"]) .markdown',
-      '[data-testid*="conversation-turn"] .markdown',
-      'article[data-testid*="conversation"] .markdown'
+      '[data-testid*="conversation-turn"]:has([data-message-author-role="assistant"])',
+      '.agent-turn'
     ];
 
-    let messages = [];
-    for (const selector of messageSelectors) {
-      messages = document.querySelectorAll(selector);
-      if (messages.length > 0) break;
+    let containers = [];
+    for (const selector of containerSelectors) {
+      containers = document.querySelectorAll(selector);
+      if (containers.length > 0) break;
     }
 
-    if (messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      // Use innerText to preserve line breaks
-      return lastMessage.innerText.trim();
+    if (containers.length === 0) return null;
+
+    const lastContainer = containers[containers.length - 1];
+
+    // Step 2: Collect text from all content areas within the container
+    // Try to get structured content first (markdown + canvas/text boxes)
+    const contentParts = [];
+
+    // Markdown sections
+    const markdownEls = lastContainer.querySelectorAll('.markdown, [class*="markdown"]');
+    // Canvas/text box sections (ChatGPT wraps some content in bordered containers)
+    const canvasEls = lastContainer.querySelectorAll('[class*="canvas"], [class*="text-block"], [class*="code-block"], pre code');
+
+    if (markdownEls.length > 0 || canvasEls.length > 0) {
+      // Collect from markdown blocks
+      markdownEls.forEach(el => {
+        const text = el.innerText.trim();
+        if (text) contentParts.push(text);
+      });
+      // Collect from canvas/text-box blocks not already inside markdown
+      canvasEls.forEach(el => {
+        // Skip if this element is inside a markdown container we already captured
+        if (el.closest('.markdown, [class*="markdown"]')) return;
+        const text = el.innerText.trim();
+        if (text) contentParts.push(text);
+      });
     }
 
-    return null;
+    // Step 3: If structured selectors found content, use it; otherwise fall back to full container text
+    if (contentParts.length > 0) {
+      return contentParts.join('\n\n').trim();
+    }
+
+    // Fallback: get the full innerText of the assistant container
+    // This catches any new UI elements ChatGPT might add
+    return lastContainer.innerText.trim();
   }
 
   // Utility functions
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
