@@ -3,6 +3,9 @@ CLAUDE.md
 DEVELOPMENT_LOG.md
 SOFTWARE_DESIGN.md
 
+# Claude Code local config
+.claude/
+
 # macOS
 .DS_Store
 .AppleDouble
