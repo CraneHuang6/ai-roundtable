@@ -27,7 +27,7 @@
   safeSendMessage({ type: 'CONTENT_SCRIPT_READY', aiType: AI_TYPE });
 
   // Listen for messages from background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'INJECT_MESSAGE') {
       injectMessage(message.message)
         .then(() => sendResponse({ success: true }))
@@ -230,6 +230,11 @@
 
         await sleep(checkInterval);
 
+        const isStreaming = document.querySelector('button[aria-label*="Stop"]') ||
+                           document.querySelector('button[data-testid="stop-button"]') ||
+                           document.querySelector('[data-testid="stop-button"]') ||
+                           document.querySelector('button[aria-label*="Stop generating"]');
+
         const currentContent = getLatestResponse() || '';
 
         // Track when content first appears
@@ -241,13 +246,13 @@
         // Debug: log every 10 seconds
         const elapsed = Date.now() - startTime;
         if (elapsed % 10000 < checkInterval) {
-          console.log(`[AI Panel] ChatGPT check: contentLen=${currentContent.length}, stableCount=${stableCount}, elapsed=${Math.round(elapsed/1000)}s`);
+          console.log(`[AI Panel] ChatGPT check: contentLen=${currentContent.length}, stableCount=${stableCount}, elapsed=${Math.round(elapsed/1000)}s, streaming=${Boolean(isStreaming)}`);
         }
 
         // Content is stable when content unchanged and has content
         const contentStable = currentContent === previousContent && currentContent.length > 0;
 
-        if (contentStable) {
+        if (!isStreaming && contentStable) {
           stableCount++;
           // Capture after 4 stable checks (2 seconds of stable content)
           if (stableCount >= stableThreshold) {
@@ -300,37 +305,95 @@
 
     const lastContainer = containers[containers.length - 1];
 
-    // Step 2: Collect text from all content areas within the container
-    // Try to get structured content first (markdown + canvas/text boxes)
     const contentParts = [];
 
-    // Markdown sections
-    const markdownEls = lastContainer.querySelectorAll('.markdown, [class*="markdown"]');
-    // Canvas/text box sections (ChatGPT wraps some content in bordered containers)
-    const canvasEls = lastContainer.querySelectorAll('[class*="canvas"], [class*="text-block"], [class*="code-block"], pre code');
+    function findOverlapSuffixPrefix(left, right) {
+      const maxLength = Math.min(left.length, right.length);
+      for (let length = maxLength; length > 0; length--) {
+        if (left.slice(-length) === right.slice(0, length)) {
+          return length;
+        }
+      }
+      return 0;
+    }
+
+    function isBoundaryChar(char) {
+      return !char || /[\s\n\r\t:：;；,，。！？、()（）\[\]{}"'`<>-]/.test(char);
+    }
+
+    function isMeaningfulOverlap(left, right, overlapLength) {
+      if (overlapLength <= 0) return false;
+
+      const leftPrefixChar = left[left.length - overlapLength - 1] || '';
+      const rightSuffixChar = right[overlapLength] || '';
+
+      return isBoundaryChar(leftPrefixChar) && isBoundaryChar(rightSuffixChar);
+    }
+
+    function addContentPart(text) {
+      const normalizedText = text.trim();
+      if (!normalizedText) return;
+
+      const duplicatedIndex = contentParts.findIndex(existing =>
+        existing === normalizedText ||
+        existing.includes(normalizedText) ||
+        normalizedText.includes(existing)
+      );
+
+      if (duplicatedIndex !== -1) {
+        if (normalizedText.length > contentParts[duplicatedIndex].length) {
+          contentParts[duplicatedIndex] = normalizedText;
+        }
+        return;
+      }
+
+      const overlapIndex = contentParts.findIndex(existing => {
+        const overlapLength = findOverlapSuffixPrefix(existing, normalizedText);
+        return isMeaningfulOverlap(existing, normalizedText, overlapLength);
+      });
+
+      if (overlapIndex !== -1) {
+        const existing = contentParts[overlapIndex];
+        const overlapLength = findOverlapSuffixPrefix(existing, normalizedText);
+        contentParts[overlapIndex] = existing + normalizedText.slice(overlapLength);
+        return;
+      }
+
+      contentParts.push(normalizedText);
+    }
+
+    function isNestedStructuredBlock(el, candidates) {
+      return candidates.some(candidate => candidate !== el && candidate.contains?.(el));
+    }
+
+    const markdownEls = Array.from(lastContainer.querySelectorAll('.markdown, [class*="markdown"]'));
+    const canvasEls = Array.from(lastContainer.querySelectorAll('[class*="canvas"], [class*="text-block"], [class*="code-block"], pre code'));
 
     if (markdownEls.length > 0 || canvasEls.length > 0) {
-      // Collect from markdown blocks
-      markdownEls.forEach(el => {
-        const text = el.innerText.trim();
-        if (text) contentParts.push(text);
+      const structuredBlocks = [
+        ...markdownEls
+          .filter(el => !isNestedStructuredBlock(el, markdownEls))
+          .map(el => ({ el, type: 'markdown' })),
+        ...canvasEls
+          .filter(el => !el.closest('.markdown, [class*="markdown"]'))
+          .filter(el => !isNestedStructuredBlock(el, canvasEls))
+          .map(el => ({ el, type: 'canvas' }))
+      ].sort((left, right) => {
+        const position = left.el.compareDocumentPosition?.(right.el) || 0;
+        if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
       });
-      // Collect from canvas/text-box blocks not already inside markdown
-      canvasEls.forEach(el => {
-        // Skip if this element is inside a markdown container we already captured
-        if (el.closest('.markdown, [class*="markdown"]')) return;
-        const text = el.innerText.trim();
-        if (text) contentParts.push(text);
+
+      structuredBlocks.forEach(({ el }) => {
+        addContentPart(el.innerText);
       });
     }
 
-    // Step 3: If structured selectors found content, use it; otherwise fall back to full container text
     if (contentParts.length > 0) {
       return contentParts.join('\n\n').trim();
     }
 
-    // Fallback: get the full innerText of the assistant container
-    // This catches any new UI elements ChatGPT might add
     return lastContainer.innerText.trim();
   }
 

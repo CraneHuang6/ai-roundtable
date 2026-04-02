@@ -118,13 +118,13 @@ function setupEventListeners() {
   });
 
   // Listen for messages from background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     if (message.type === 'TAB_STATUS_UPDATE') {
       updateTabStatus(message.aiType, message.connected);
     } else if (message.type === 'RESPONSE_CAPTURED') {
       log(`${message.aiType}: Response captured`, 'success');
       // Handle discussion mode response
-      if (discussionState.active && discussionState.pendingResponses.has(message.aiType)) {
+      if (discussionState.active && shouldHandleDiscussionCapture(message.aiType)) {
         handleDiscussionResponse(message.aiType, message.content);
       }
     } else if (message.type === 'SEND_RESULT') {
@@ -349,7 +349,7 @@ async function handleCrossReference(parsed) {
   }
 
   // Build the full message with XML tags for each source
-  let fullMessage = parsed.originalMessage + '\n';
+  let fullMessage = `请用中文回复。\n${parsed.originalMessage}\n`;
 
   for (const source of sourceResponses) {
     fullMessage += `
@@ -401,7 +401,7 @@ ${responses[sourceAI]}
 `;
     }
 
-    evalMessage += `\n${prompt}`;
+    evalMessage += `\n请用中文回复。\n${prompt}`;
 
     log(`[Mutual] Sending to ${targetAI}: ${otherAIs.join('+')} responses + prompt`);
     await sendToAI(targetAI, evalMessage);
@@ -548,12 +548,46 @@ async function startDiscussion() {
 
   // Send topic to both AIs
   for (const ai of selected) {
-    await sendToAI(ai, `Please share your thoughts on the following topic:\n\n${topic}`);
+    await sendToAI(ai, `请围绕以下话题分享你的看法，并始终使用中文回复：\n\n${topic}`);
   }
+}
+
+function shouldHandleDiscussionCapture(aiType) {
+  if (!discussionState.active) return false;
+
+  if (discussionState.pendingResponses.has(aiType)) {
+    return true;
+  }
+
+  const existingEntry = discussionState.history.find(
+    entry =>
+      entry.round === discussionState.currentRound &&
+      entry.ai === aiType &&
+      entry.type === discussionState.roundType
+  );
+
+  return Boolean(existingEntry);
 }
 
 function handleDiscussionResponse(aiType, content) {
   if (!discussionState.active) return;
+
+  const existingEntry = discussionState.history.find(
+    entry =>
+      entry.round === discussionState.currentRound &&
+      entry.ai === aiType &&
+      entry.type === discussionState.roundType
+  );
+
+  if (existingEntry) {
+    if (content.length <= existingEntry.content.length) {
+      return;
+    }
+
+    existingEntry.content = content;
+    log(`讨论: ${aiType} 回复已更新 (第 ${discussionState.currentRound} 轮)`, 'success');
+    return;
+  }
 
   // Record this response in history
   discussionState.history.push({
@@ -619,22 +653,28 @@ async function nextRound() {
 
   // Send cross-evaluation requests
   // AI1 evaluates AI2's response
-  const msg1 = `Here is ${capitalize(ai2)}'s response to the topic "${discussionState.topic}":
+  const msg1 = `以下是 ${capitalize(ai2)} 针对话题“${discussionState.topic}”的回复：
 
 <${ai2}_response>
 ${ai2Response}
 </${ai2}_response>
 
-Please evaluate this response. What do you agree with? What do you disagree with? What would you add or change?`;
+请用中文回复。请评价这段回复，并说明：
+1. 你同意什么
+2. 你不同意什么
+3. 你会补充或修改什么`;
 
   // AI2 evaluates AI1's response
-  const msg2 = `Here is ${capitalize(ai1)}'s response to the topic "${discussionState.topic}":
+  const msg2 = `以下是 ${capitalize(ai1)} 针对话题“${discussionState.topic}”的回复：
 
 <${ai1}_response>
 ${ai1Response}
 </${ai1}_response>
 
-Please evaluate this response. What do you agree with? What do you disagree with? What would you add or change?`;
+请用中文回复。请评价这段回复，并说明：
+1. 你同意什么
+2. 你不同意什么
+3. 你会补充或修改什么`;
 
   await sendToAI(ai1, msg1);
   await sendToAI(ai2, msg2);
@@ -676,7 +716,7 @@ async function handleInterject() {
   // Send to AI1: user message + AI2's response
   const msg1 = `${message}
 
-以下是 ${capitalize(ai2)} 的最新回复：
+请用中文回复。以下是 ${capitalize(ai2)} 的最新回复：
 
 <${ai2}_response>
 ${ai2Response}
@@ -685,7 +725,7 @@ ${ai2Response}
   // Send to AI2: user message + AI1's response
   const msg2 = `${message}
 
-以下是 ${capitalize(ai1)} 的最新回复：
+请用中文回复。以下是 ${capitalize(ai1)} 的最新回复：
 
 <${ai1}_response>
 ${ai1Response}
@@ -718,7 +758,7 @@ async function generateSummary() {
     }
   }
 
-  const summaryPrompt = `请对以下 AI 之间的讨论进行总结。请包含：
+  const summaryPrompt = `请用中文回复，并对以下 AI 之间的讨论进行总结。请包含：
 1. 主要共识点
 2. 主要分歧点
 3. 各方的核心观点
