@@ -218,3 +218,21 @@ test('discussion mode uses Chinese prompts in every discussion stage', async () 
   assert.ok(crossEvalMessages.every((message) => !message.includes('Please evaluate this response')));
   assert.ok(crossEvalMessages.every((message) => !message.includes('Here is ')));
 });
+
+test('discussion mode keeps the interject send action visible above the footer controls', () => {
+  const css = fs.readFileSync('D:/Coding/ai-roundtable/sidepanel/panel.css', 'utf8');
+  const discussionInterjectBlock = css.match(/\.discussion-interject\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const interjectActionsBlock = css.match(/\.interject-actions\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+
+  assert.ok(discussionInterjectBlock, 'expected .discussion-interject styles to exist');
+  assert.ok(interjectActionsBlock, 'expected .interject-actions styles to exist');
+  assert.ok(
+    !/\bflex\s*:\s*1\b/.test(discussionInterjectBlock),
+    'discussion interject container should not consume all remaining height'
+  );
+  assert.match(
+    interjectActionsBlock,
+    /flex-shrink\s*:\s*0/,
+    'interject action row should resist shrinking so the send button stays visible'
+  );
+});

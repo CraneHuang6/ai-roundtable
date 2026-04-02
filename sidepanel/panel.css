@@ -896,7 +896,6 @@ header .subtitle {
   flex-direction: column;
   gap: 8px;
   margin-top: 12px;
-  flex: 1;
   min-height: 0;
 }
 
@@ -935,6 +934,7 @@ header .subtitle {
 .interject-actions {
   display: flex;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 #interject-btn {
