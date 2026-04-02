@@ -605,12 +605,72 @@ header .subtitle {
   font-size: 11px;
 }
 
+/* Shared long text display */
+.long-text-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.long-text-preview,
+.long-text-full {
+  min-width: 0;
+  max-width: 100%;
+  color: inherit;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.long-text-preview {
+  max-height: 120px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.long-text-full {
+  max-height: none;
+  overflow: visible;
+  padding-right: 4px;
+}
+
+.long-text-toggle-button {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid var(--border-glass);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--accent-secondary);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.long-text-toggle-button:hover {
+  background: rgba(14, 165, 233, 0.12);
+  border-color: var(--accent-secondary);
+  color: var(--text-primary);
+}
+
+.long-text-toggle-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-primary);
+}
+
 .log-entry {
   padding: 6px 0;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
   display: flex;
+  align-items: flex-start;
   gap: 8px;
+  min-width: 0;
 }
 
 .log-entry.success {
@@ -866,6 +926,8 @@ header .subtitle {
   margin-bottom: 10px;
   border-left: 3px solid var(--accent-primary);
   flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .discussion-status {
@@ -1098,6 +1160,8 @@ header .subtitle {
   padding: 12px;
   background: var(--bg-elevated);
   border-radius: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 #summary-content .ai-name {

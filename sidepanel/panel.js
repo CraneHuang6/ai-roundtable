@@ -40,6 +40,65 @@ let discussionState = {
   roundType: null  // 'initial', 'cross-eval', 'counter'
 };
 
+const LONG_TEXT_THRESHOLD = 240;
+let longTextIdCounter = 0;
+
+function escapeLongText(text) {
+  return escapeHtml(String(text ?? '')).replace(/\n/g, '<br>');
+}
+
+function isLongText(text) {
+  return String(text ?? '').length > LONG_TEXT_THRESHOLD;
+}
+
+function renderLongTextHTML(text, options = {}) {
+  const normalizedText = String(text ?? '');
+  if (!isLongText(normalizedText)) {
+    return escapeLongText(normalizedText);
+  }
+
+  const previewLength = options.previewLength ?? LONG_TEXT_THRESHOLD;
+  const preview = normalizedText.slice(0, previewLength) + '...';
+  const longTextId = `long-text-${++longTextIdCounter}`;
+
+  return `
+    <div class="long-text-block long-text-toggle" data-long-text-id="${longTextId}" data-expanded="false">
+      <div class="long-text-preview">${escapeLongText(preview)}</div>
+      <button type="button" class="long-text-toggle-button" data-long-text-toggle="${longTextId}" aria-expanded="false">展开全文</button>
+      <div class="long-text-full hidden" hidden>${escapeLongText(normalizedText)}</div>
+    </div>
+  `;
+}
+
+function handleLongTextToggle(event) {
+  const toggleButton = event.target.closest('.long-text-toggle-button');
+  if (!toggleButton) {
+    return;
+  }
+
+  const toggle = toggleButton.closest('.long-text-toggle');
+  if (!toggle) {
+    return;
+  }
+
+  const preview = toggle.querySelector('.long-text-preview');
+  const full = toggle.querySelector('.long-text-full');
+  const expanded = toggle.dataset.expanded === 'true';
+  const nextExpanded = !expanded;
+
+  toggle.dataset.expanded = String(nextExpanded);
+  toggleButton.setAttribute('aria-expanded', String(nextExpanded));
+  toggleButton.textContent = nextExpanded ? '收起' : '展开全文';
+
+  if (preview) {
+    preview.hidden = nextExpanded;
+    preview.classList.toggle('hidden', nextExpanded);
+  }
+  if (full) {
+    full.hidden = !nextExpanded;
+    full.classList.toggle('hidden', !nextExpanded);
+  }
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -51,6 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function setupEventListeners() {
   sendBtn.addEventListener('click', handleSend);
+  document.addEventListener('click', handleLongTextToggle);
 
   // Enter to send, Shift+Enter for new line (like ChatGPT)
   // But ignore Enter during IME composition (e.g., Chinese input)
@@ -448,7 +508,7 @@ function log(message, type = 'info') {
     second: '2-digit'
   });
 
-  entry.innerHTML = `<span class="time">${time}</span>${message}`;
+  entry.innerHTML = `<span class="time">${time}</span>${renderLongTextHTML(message)}`;
   logContainer.insertBefore(entry, logContainer.firstChild);
 
   // Keep only last 50 entries
@@ -537,7 +597,7 @@ async function startDiscussion() {
   document.getElementById('round-badge').textContent = '第 1 轮';
   document.getElementById('participants-badge').textContent =
     `${capitalize(selected[0])} vs ${capitalize(selected[1])}`;
-  document.getElementById('topic-display').textContent = topic;
+  document.getElementById('topic-display').innerHTML = renderLongTextHTML(topic);
   updateDiscussionStatus('waiting', `等待 ${selected.join(' 和 ')} 的初始回复...`);
 
   // Disable buttons during round
@@ -808,11 +868,11 @@ function showSummary(ai1Summary, ai2Summary) {
     <div class="summary-comparison">
       <div class="ai-response">
         <div class="ai-name ${ai1}">${capitalize(ai1)} 的总结：</div>
-        <div>${escapeHtml(ai1Summary).replace(/\n/g, '<br>')}</div>
+        <div>${renderLongTextHTML(ai1Summary)}</div>
       </div>
       <div class="ai-response">
         <div class="ai-name ${ai2}">${capitalize(ai2)} 的总结：</div>
-        <div>${escapeHtml(ai2Summary).replace(/\n/g, '<br>')}</div>
+        <div>${renderLongTextHTML(ai2Summary)}</div>
       </div>
     </div>
   </div>`;
@@ -824,10 +884,9 @@ function showSummary(ai1Summary, ai2Summary) {
     if (roundEntries.length > 0) {
       html += `<div style="margin-top:12px"><strong>第 ${round} 轮</strong></div>`;
       for (const entry of roundEntries) {
-        const preview = entry.content.substring(0, 200) + (entry.content.length > 200 ? '...' : '');
         html += `<div class="ai-response">
           <div class="ai-name ${entry.ai}">${capitalize(entry.ai)}:</div>
-          <div>${escapeHtml(preview).replace(/\n/g, '<br>')}</div>
+          <div>${renderLongTextHTML(entry.content)}</div>
         </div>`;
       }
     }
