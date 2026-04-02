@@ -5,6 +5,7 @@ SOFTWARE_DESIGN.md
 
 # Claude Code local config
 .claude/
+.worktrees/
 
 # macOS
 .DS_Store
