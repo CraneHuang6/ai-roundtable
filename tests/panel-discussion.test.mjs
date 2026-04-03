@@ -15,6 +15,7 @@ function loadPanel() {
   const longTextNodes = new Map();
   const domReadyCallbacks = [];
   const sentMessages = [];
+  const latestResponses = new Map();
   let selectedParticipants = [];
   let onMessageListener = null;
 
@@ -212,6 +213,12 @@ function loadPanel() {
       },
       sendMessage(message, callback) {
         sentMessages.push(message);
+
+        if (message.type === 'GET_RESPONSE') {
+          callback?.({ success: true, content: latestResponses.get(message.aiType) ?? null });
+          return;
+        }
+
         callback?.({ success: true, content: null });
       }
     },
@@ -250,8 +257,11 @@ function loadPanel() {
     getDiscussionState: () => discussionState,
     setDiscussionState: (value) => { discussionState = value; },
     getOnMessageListener: () => globalThis.__onMessageListener,
+    validateParticipants,
     startDiscussion,
     nextRound,
+    handleInterject,
+    generateSummary,
     showSummary
   };
   `;
@@ -270,8 +280,13 @@ function loadPanel() {
     querySelector: (selector) => document.querySelector(selector),
     getOnMessageListener: () => onMessageListener,
     getSentMessages: () => sentMessages,
+    getDiscussionMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE'),
     setSelectedParticipants: (participants) => {
       selectedParticipants = [...participants];
+    },
+    setLatestResponses: (responses) => {
+      latestResponses.clear();
+      Object.entries(responses).forEach(([ai, content]) => latestResponses.set(ai, content));
     }
   };
 }
@@ -304,7 +319,7 @@ test('discussion mode keeps the latest fuller capture for the same AI in the sam
   );
 });
 
-test('discussion mode uses Chinese prompts in every discussion stage', async () => {
+test('discussion mode uses Chinese prompts in start and next-round cross-evaluation stages', async () => {
   const panel = loadPanel();
   panel.setSelectedParticipants(['chatgpt', 'claude']);
   panel.getElementById('discussion-topic').value = 'Claude Code 和 Codex 哪个更适合非程序员使用？';
@@ -341,7 +356,7 @@ test('discussion mode uses Chinese prompts in every discussion stage', async () 
 
   assert.equal(crossEvalMessages.length, 2);
   assert.ok(crossEvalMessages.every((message) => message.includes('请用中文回复')));
-  assert.ok(crossEvalMessages.every((message) => message.includes('请评价这段回复')));
+  assert.ok(crossEvalMessages.every((message) => message.includes('请评价')));
   assert.ok(crossEvalMessages.every((message) => !message.includes('Please evaluate this response')));
   assert.ok(crossEvalMessages.every((message) => !message.includes('Here is ')));
 });
@@ -400,6 +415,143 @@ test('discussion summary renders long text through the shared long-text containe
     panel.querySelector(`[data-long-text-id="${longTextId}"]`)?.closest('.long-text-toggle'),
     'expected the rendered summary long-text node to resolve its long-text toggle ancestor'
   );
+});
+
+test('discussion mode enables start only for 2 or 3 selected participants', () => {
+  const panel = loadPanel();
+  const startButton = panel.getElementById('start-discussion-btn');
+
+  panel.setSelectedParticipants(['claude']);
+  panel.api.validateParticipants();
+  assert.equal(startButton.disabled, true);
+
+  panel.setSelectedParticipants(['claude', 'chatgpt']);
+  panel.api.validateParticipants();
+  assert.equal(startButton.disabled, false);
+
+  panel.setSelectedParticipants(['claude', 'chatgpt', 'gemini']);
+  panel.api.validateParticipants();
+  assert.equal(startButton.disabled, false);
+});
+
+test('discussion start stores all selected participants and renders a neutral participant badge', async () => {
+  const panel = loadPanel();
+  panel.setSelectedParticipants(['claude', 'chatgpt', 'gemini']);
+  panel.getElementById('discussion-topic').value = '三方讨论主题';
+
+  await panel.api.startDiscussion();
+
+  const state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.participants), ['claude', 'chatgpt', 'gemini']);
+
+  const badgeText = panel.getElementById('participants-badge').textContent;
+  assert.match(badgeText, /Claude/);
+  assert.match(badgeText, /ChatGPT/);
+  assert.match(badgeText, /Gemini/);
+  assert.doesNotMatch(badgeText, /vs/);
+
+  const statusText = panel.getElementById('discussion-status').textContent;
+  assert.match(statusText, /Claude/);
+  assert.match(statusText, /ChatGPT/);
+  assert.match(statusText, /Gemini/);
+});
+
+test('next round sends each participant the other two previous-round replies in three-party mode', async () => {
+  const panel = loadPanel();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '多方协作的优缺点',
+    participants: ['claude', 'chatgpt', 'gemini'],
+    currentRound: 1,
+    history: [
+      { round: 1, ai: 'claude', type: 'initial', content: 'Claude 初始观点' },
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 初始观点' },
+      { round: 1, ai: 'gemini', type: 'initial', content: 'Gemini 初始观点' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'initial'
+  });
+
+  await panel.api.nextRound();
+
+  const messages = panel.getDiscussionMessages().slice(-3);
+  assert.equal(messages.length, 3);
+
+  const claudePrompt = messages.find((message) => message.aiType === 'claude')?.message ?? '';
+  const chatgptPrompt = messages.find((message) => message.aiType === 'chatgpt')?.message ?? '';
+  const geminiPrompt = messages.find((message) => message.aiType === 'gemini')?.message ?? '';
+
+  assert.match(claudePrompt, /<chatgpt_response>[\s\S]*ChatGPT 初始观点/);
+  assert.match(claudePrompt, /<gemini_response>[\s\S]*Gemini 初始观点/);
+  assert.match(chatgptPrompt, /<claude_response>[\s\S]*Claude 初始观点/);
+  assert.match(chatgptPrompt, /<gemini_response>[\s\S]*Gemini 初始观点/);
+  assert.match(geminiPrompt, /<claude_response>[\s\S]*Claude 初始观点/);
+  assert.match(geminiPrompt, /<chatgpt_response>[\s\S]*ChatGPT 初始观点/);
+  assert.ok(messages.every((message) => message.message.includes('请始终使用中文回复') || message.message.includes('请用中文回复')));
+});
+
+test('interject sends each participant the user message plus all other latest replies', async () => {
+  const panel = loadPanel();
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '三方插话测试',
+    participants: ['claude', 'chatgpt', 'gemini'],
+    currentRound: 2,
+    history: [],
+    pendingResponses: new Set(),
+    roundType: 'cross-eval'
+  });
+
+  panel.setLatestResponses({
+    claude: 'Claude 最新回复',
+    chatgpt: 'ChatGPT 最新回复',
+    gemini: 'Gemini 最新回复'
+  });
+  panel.getElementById('interject-input').value = '请聚焦工程复杂度';
+
+  await panel.api.handleInterject();
+
+  const messages = panel.getDiscussionMessages().slice(-3);
+  assert.equal(messages.length, 3);
+  const claudeMessage = messages.find((message) => message.aiType === 'claude')?.message ?? '';
+  const chatgptMessage = messages.find((message) => message.aiType === 'chatgpt')?.message ?? '';
+  const geminiMessage = messages.find((message) => message.aiType === 'gemini')?.message ?? '';
+
+  assert.match(claudeMessage, /ChatGPT 最新回复/);
+  assert.match(claudeMessage, /Gemini 最新回复/);
+  assert.match(chatgptMessage, /Claude 最新回复/);
+  assert.match(chatgptMessage, /Gemini 最新回复/);
+  assert.match(geminiMessage, /Claude 最新回复/);
+  assert.match(geminiMessage, /ChatGPT 最新回复/);
+});
+
+test('summary view renders one summary card per selected participant', () => {
+  const panel = loadPanel();
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '总结卡片测试',
+    participants: ['claude', 'chatgpt', 'gemini'],
+    currentRound: 1,
+    history: [
+      { round: 1, ai: 'claude', type: 'initial', content: 'Claude 历史内容' },
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 历史内容' },
+      { round: 1, ai: 'gemini', type: 'initial', content: 'Gemini 历史内容' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'summary'
+  });
+
+  panel.api.showSummary('Claude 总结', 'ChatGPT 总结', 'Gemini 总结');
+
+  const html = panel.getElementById('summary-content').innerHTML;
+  assert.match(html, /Claude 的总结/);
+  assert.match(html, /ChatGPT 的总结/);
+  assert.match(html, /Gemini 的总结/);
+  assert.doesNotMatch(html, /双方总结对比/);
+
+  const summaryCardCount = (html.match(/的总结：/g) || []).length;
+  assert.equal(summaryCardCount, 3, 'should render exactly 3 summary cards for 3 participants');
 });
 
 test('discussion mode keeps the action area accessible in a stable stacked layout', () => {

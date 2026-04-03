@@ -562,7 +562,7 @@ function switchMode(mode) {
 function validateParticipants() {
   const selected = document.querySelectorAll('input[name="participant"]:checked');
   const startBtn = document.getElementById('start-discussion-btn');
-  startBtn.disabled = selected.length !== 2;
+  startBtn.disabled = selected.length < 2 || selected.length > 3;
 }
 
 async function startDiscussion() {
@@ -575,8 +575,8 @@ async function startDiscussion() {
   const selected = Array.from(document.querySelectorAll('input[name="participant"]:checked'))
     .map(cb => cb.value);
 
-  if (selected.length !== 2) {
-    log('请选择 2 位参与者', 'error');
+  if (selected.length < 2 || selected.length > 3) {
+    log('请选择 2~3 位参与者', 'error');
     return;
   }
 
@@ -596,15 +596,15 @@ async function startDiscussion() {
   document.getElementById('discussion-active').classList.remove('hidden');
   document.getElementById('round-badge').textContent = '第 1 轮';
   document.getElementById('participants-badge').textContent =
-    `${capitalize(selected[0])} vs ${capitalize(selected[1])}`;
+    selected.map(capitalize).join(' · ');
   document.getElementById('topic-display').innerHTML = renderLongTextHTML(topic);
-  updateDiscussionStatus('waiting', `等待 ${selected.join(' 和 ')} 的初始回复...`);
+  updateDiscussionStatus('waiting', `等待 ${selected.map(capitalize).join('、')} 的初始回复...`);
 
   // Disable buttons during round
   document.getElementById('next-round-btn').disabled = true;
   document.getElementById('generate-summary-btn').disabled = true;
 
-  log(`讨论开始: ${selected.join(' vs ')}`, 'success');
+  log(`讨论开始: ${selected.map(capitalize).join('、')}`, 'success');
 
   // Send topic to both AIs
   for (const ai of selected) {
@@ -682,62 +682,53 @@ function onRoundComplete() {
 
 async function nextRound() {
   discussionState.currentRound++;
-  const [ai1, ai2] = discussionState.participants;
+  const participants = discussionState.participants;
 
   // Update UI
   document.getElementById('round-badge').textContent = `第 ${discussionState.currentRound} 轮`;
   document.getElementById('next-round-btn').disabled = true;
   document.getElementById('generate-summary-btn').disabled = true;
 
-  // Get previous round responses
+  // Get previous round responses for all participants
   const prevRound = discussionState.currentRound - 1;
-  const ai1Response = discussionState.history.find(
-    h => h.round === prevRound && h.ai === ai1
-  )?.content;
-  const ai2Response = discussionState.history.find(
-    h => h.round === prevRound && h.ai === ai2
-  )?.content;
+  const prevResponses = new Map();
 
-  if (!ai1Response || !ai2Response) {
-    log('缺少上一轮的回复', 'error');
-    return;
+  for (const ai of participants) {
+    const response = discussionState.history.find(
+      h => h.round === prevRound && h.ai === ai
+    )?.content;
+    if (!response) {
+      log('缺少上一轮的回复', 'error');
+      return;
+    }
+    prevResponses.set(ai, response);
   }
 
   // Set pending responses
-  discussionState.pendingResponses = new Set([ai1, ai2]);
+  discussionState.pendingResponses = new Set(participants);
   discussionState.roundType = 'cross-eval';
 
-  updateDiscussionStatus('waiting', `交叉评价: ${ai1} 评价 ${ai2}，${ai2} 评价 ${ai1}...`);
+  updateDiscussionStatus('waiting', `第 ${discussionState.currentRound} 轮：各方继续讨论...`);
 
   log(`第 ${discussionState.currentRound} 轮: 交叉评价开始`);
 
-  // Send cross-evaluation requests
-  // AI1 evaluates AI2's response
-  const msg1 = `以下是 ${capitalize(ai2)} 针对话题“${discussionState.topic}”的回复：
+  // Send to each participant: the other participants' responses
+  for (const ai of participants) {
+    const otherParticipants = participants.filter(p => p !== ai);
 
-<${ai2}_response>
-${ai2Response}
-</${ai2}_response>
+    let prompt = `以下是其他参与者针对话题”${discussionState.topic}”的回复：\n\n`;
 
-请用中文回复。请评价这段回复，并说明：
+    for (const other of otherParticipants) {
+      prompt += `<${other}_response>\n${prevResponses.get(other)}\n</${other}_response>\n\n`;
+    }
+
+    prompt += `请用中文回复。请评价这些回复，并说明：
 1. 你同意什么
 2. 你不同意什么
 3. 你会补充或修改什么`;
 
-  // AI2 evaluates AI1's response
-  const msg2 = `以下是 ${capitalize(ai1)} 针对话题“${discussionState.topic}”的回复：
-
-<${ai1}_response>
-${ai1Response}
-</${ai1}_response>
-
-请用中文回复。请评价这段回复，并说明：
-1. 你同意什么
-2. 你不同意什么
-3. 你会补充或修改什么`;
-
-  await sendToAI(ai1, msg1);
-  await sendToAI(ai2, msg2);
+    await sendToAI(ai, prompt);
+  }
 }
 
 async function handleInterject() {
@@ -757,44 +748,38 @@ async function handleInterject() {
   const btn = document.getElementById('interject-btn');
   btn.disabled = true;
 
-  const [ai1, ai2] = discussionState.participants;
+  const participants = discussionState.participants;
 
-  log(`[插话] 正在获取双方最新回复...`);
+  log(`[插话] 正在获取各方最新回复...`);
 
-  // Get latest responses from both participants
-  const ai1Response = await getLatestResponse(ai1);
-  const ai2Response = await getLatestResponse(ai2);
-
-  if (!ai1Response || !ai2Response) {
-    log(`[插话] 无法获取回复，请确保双方都已回复`, 'error');
-    btn.disabled = false;
-    return;
+  // Get latest responses from all participants
+  const latestResponses = new Map();
+  for (const ai of participants) {
+    const response = await getLatestResponse(ai);
+    if (!response) {
+      log(`[插话] 无法获取 ${capitalize(ai)} 的回复`, 'error');
+      btn.disabled = false;
+      return;
+    }
+    latestResponses.set(ai, response);
   }
 
-  log(`[插话] 已获取双方回复，正在发送...`);
+  log(`[插话] 已获取各方回复，正在发送...`);
 
-  // Send to AI1: user message + AI2's response
-  const msg1 = `${message}
+  // Send to each participant: user message + all other participants' responses
+  for (const ai of participants) {
+    const otherParticipants = participants.filter(p => p !== ai);
 
-请用中文回复。以下是 ${capitalize(ai2)} 的最新回复：
+    let prompt = `${message}\n\n请用中文回复。以下是其他参与者的最新回复：\n\n`;
 
-<${ai2}_response>
-${ai2Response}
-</${ai2}_response>`;
+    for (const other of otherParticipants) {
+      prompt += `<${other}_response>\n${latestResponses.get(other)}\n</${other}_response>\n\n`;
+    }
 
-  // Send to AI2: user message + AI1's response
-  const msg2 = `${message}
+    await sendToAI(ai, prompt.trim());
+  }
 
-请用中文回复。以下是 ${capitalize(ai1)} 的最新回复：
-
-<${ai1}_response>
-${ai1Response}
-</${ai1}_response>`;
-
-  await sendToAI(ai1, msg1);
-  await sendToAI(ai2, msg2);
-
-  log(`[插话] 已发送给双方（含对方回复）`, 'success');
+  log(`[插话] 已发送给各方（含其他方回复）`, 'success');
 
   // Clear input
   input.value = '';
@@ -803,9 +788,9 @@ ${ai1Response}
 
 async function generateSummary() {
   document.getElementById('generate-summary-btn').disabled = true;
-  updateDiscussionStatus('waiting', '正在请求双方生成总结...');
+  updateDiscussionStatus('waiting', '正在请求各方生成总结...');
 
-  const [ai1, ai2] = discussionState.participants;
+  const participants = discussionState.participants;
 
   // Build conversation history for summary
   let historyText = `主题: ${discussionState.topic}\n\n`;
@@ -827,53 +812,55 @@ async function generateSummary() {
 讨论历史：
 ${historyText}`;
 
-  // Send to both AIs
+  // Send to all participants
   discussionState.roundType = 'summary';
-  discussionState.pendingResponses = new Set([ai1, ai2]);
+  discussionState.pendingResponses = new Set(participants);
 
-  log(`[Summary] 正在请求双方生成总结...`);
-  await sendToAI(ai1, summaryPrompt);
-  await sendToAI(ai2, summaryPrompt);
+  log(`[Summary] 正在请求各方生成总结...`);
+  for (const ai of participants) {
+    await sendToAI(ai, summaryPrompt);
+  }
 
-  // Wait for both responses, then show summary
+  // Wait for all responses, then show summary
   const checkForSummary = setInterval(async () => {
     if (discussionState.pendingResponses.size === 0) {
       clearInterval(checkForSummary);
 
-      // Get both summaries
+      // Get all summaries
       const summaries = discussionState.history.filter(h => h.type === 'summary');
-      const ai1Summary = summaries.find(s => s.ai === ai1)?.content || '';
-      const ai2Summary = summaries.find(s => s.ai === ai2)?.content || '';
+      const summaryArgs = participants.map(ai => summaries.find(s => s.ai === ai)?.content || '');
 
-      log(`[Summary] 双方总结已生成`, 'success');
-      showSummary(ai1Summary, ai2Summary);
+      log(`[Summary] 各方总结已生成`, 'success');
+      showSummary(...summaryArgs);
     }
   }, 500);
 }
 
-function showSummary(ai1Summary, ai2Summary) {
+function showSummary(...summaries) {
   document.getElementById('discussion-active').classList.add('hidden');
   document.getElementById('discussion-summary').classList.remove('hidden');
 
-  const [ai1, ai2] = discussionState.participants;
+  const participants = discussionState.participants;
 
   // Handle empty summaries
-  if (!ai1Summary && !ai2Summary) {
+  if (summaries.every(s => !s)) {
     log('警告: 未收到 AI 的总结内容', 'error');
   }
 
-  // Build summary HTML - show both summaries side by side conceptually
+  // Build summary HTML - show all summaries
   let html = `<div class="round-summary">
-    <h4>双方总结对比</h4>
-    <div class="summary-comparison">
+    <h4>讨论总结</h4>
+    <div class="summary-comparison">`;
+
+  participants.forEach((ai, index) => {
+    html += `
       <div class="ai-response">
-        <div class="ai-name ${ai1}">${capitalize(ai1)} 的总结：</div>
-        <div>${renderLongTextHTML(ai1Summary)}</div>
-      </div>
-      <div class="ai-response">
-        <div class="ai-name ${ai2}">${capitalize(ai2)} 的总结：</div>
-        <div>${renderLongTextHTML(ai2Summary)}</div>
-      </div>
+        <div class="ai-name ${ai}">${capitalize(ai)} 的总结：</div>
+        <div>${renderLongTextHTML(summaries[index] || '')}</div>
+      </div>`;
+  });
+
+  html += `
     </div>
   </div>`;
 
@@ -933,6 +920,7 @@ function updateDiscussionStatus(state, text) {
 }
 
 function capitalize(str) {
+  if (str === 'chatgpt') return 'ChatGPT';
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
