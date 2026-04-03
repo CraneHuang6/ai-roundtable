@@ -222,6 +222,12 @@ ai-roundtable/
 └── icons/                  # 扩展图标
 ```
 
+## 设计记录 / Design Notes
+
+- [Long Text Display Design](docs/superpowers/specs/2026-04-02-long-text-display-design.md) - 统一侧边栏长文本展示协议
+- [Long Text Display Implementation Plan](docs/superpowers/plans/2026-04-02-long-text-display.md) - 长文本展示改造的实现计划
+- [Discussion Responsive Spec](docs/superpowers/specs/2026-04-03-discussion-responsive-spec.md) - discussion 模式“主操作优先”的响应式规范与宿主验证约束
+
 ---
 
 ## 隐私说明

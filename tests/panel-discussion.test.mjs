@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const PANEL_JS = 'D:/Coding/ai-roundtable/.worktrees/long-text-display/sidepanel/panel.js';
-const PANEL_CSS = 'D:/Coding/ai-roundtable/.worktrees/long-text-display/sidepanel/panel.css';
+const PANEL_JS = new URL('../sidepanel/panel.js', import.meta.url);
+const PANEL_CSS = new URL('../sidepanel/panel.css', import.meta.url);
 
 function extractLongTextId(html) {
   return html.match(/data-long-text-id="([^"]+)"/)?.[1] ?? null;
@@ -402,20 +402,120 @@ test('discussion summary renders long text through the shared long-text containe
   );
 });
 
-test('discussion mode keeps the interject send action visible above the footer controls', () => {
+test('discussion mode keeps the action area accessible in a stable stacked layout', () => {
   const css = fs.readFileSync(PANEL_CSS, 'utf8');
+  const discussionActiveBlock = css.match(/\.discussion-active\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const discussionInterjectBlock = css.match(/\.discussion-interject\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const interjectInputBlock = css.match(/#interject-input\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const interjectActionsBlock = css.match(/\.interject-actions\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const interjectButtonBlock = css.match(/#interject-btn\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const discussionControlsBlock = css.match(/\.discussion-controls\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const discussionControlsButtonBlock = css.match(/\.discussion-controls button\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const discussionHeaderBlock = css.match(/\.discussion-header\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const discussionInfoBlock = css.match(/\.discussion-info\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const endButtonBlock = css.match(/\.end-btn\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const discussionLogBlock = css.match(/#discussion-mode:not\(\.hidden\)\s*~\s*\.log\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const discussionCopyrightBlock = css.match(/#discussion-mode:not\(\.hidden\)\s*~\s*\.copyright\s*\{([\s\S]*?)\}/)?.[1] ?? '';
 
+  assert.ok(discussionActiveBlock, 'expected .discussion-active styles to exist');
+  assert.ok(discussionHeaderBlock, 'expected .discussion-header styles to exist');
+  assert.ok(discussionInfoBlock, 'expected .discussion-info styles to exist');
+  assert.ok(endButtonBlock, 'expected .end-btn styles to exist');
   assert.ok(discussionInterjectBlock, 'expected .discussion-interject styles to exist');
+  assert.ok(interjectInputBlock, 'expected #interject-input styles to exist');
   assert.ok(interjectActionsBlock, 'expected .interject-actions styles to exist');
+  assert.ok(interjectButtonBlock, 'expected #interject-btn styles to exist');
+  assert.ok(discussionControlsBlock, 'expected .discussion-controls styles to exist');
+  assert.ok(discussionControlsButtonBlock, 'expected .discussion-controls button styles to exist');
+  assert.ok(discussionLogBlock, 'expected a discussion-mode specific log height rule');
+  assert.ok(discussionCopyrightBlock, 'expected a discussion-mode specific copyright rule');
+  assert.match(
+    discussionActiveBlock,
+    /overflow-y\s*:\s*auto/,
+    'discussion body should scroll instead of clipping bottom actions when content grows'
+  );
+  assert.match(
+    discussionHeaderBlock,
+    /gap\s*:\s*8px/,
+    'discussion header should keep an explicit gap so the end button does not stick to the info group in narrow panels'
+  );
+  assert.match(
+    discussionInfoBlock,
+    /min-width\s*:\s*0/,
+    'discussion info group should allow shrinking inside narrow headers'
+  );
+  assert.match(
+    discussionInfoBlock,
+    /flex-wrap\s*:\s*wrap/,
+    'discussion info group should wrap its badges in ultra narrow sidepanels'
+  );
+  assert.match(
+    endButtonBlock,
+    /flex-shrink\s*:\s*0/,
+    'end button should resist shrinking in narrow headers'
+  );
   assert.ok(
     !/\bflex\s*:\s*1\b/.test(discussionInterjectBlock),
     'discussion interject container should not consume all remaining height'
   );
   assert.match(
+    discussionInterjectBlock,
+    /flex-shrink\s*:\s*0/,
+    'discussion interject container should resist flex shrinking so its textarea and send button stay in normal flow'
+  );
+  assert.match(
+    interjectInputBlock,
+    /flex\s*:\s*none/,
+    'interject textarea should keep a fixed footprint instead of stretching vertically'
+  );
+  assert.match(
+    interjectInputBlock,
+    /min-height\s*:\s*56px/,
+    'interject textarea should use a reduced minimum height to preserve action visibility'
+  );
+  assert.match(
     interjectActionsBlock,
     /flex-shrink\s*:\s*0/,
     'interject action row should resist shrinking so the send button stays visible'
+  );
+  assert.match(
+    interjectButtonBlock,
+    /width\s*:\s*100%/,
+    'interject send button should span the full row to avoid horizontal collisions'
+  );
+  assert.match(
+    discussionControlsBlock,
+    /flex-direction\s*:\s*column/,
+    'discussion footer controls should stack vertically to stay visible in narrow panels'
+  );
+  assert.match(
+    discussionControlsButtonBlock,
+    /width\s*:\s*100%/,
+    'discussion footer buttons should span the full row in the stacked layout'
+  );
+  assert.match(
+    discussionControlsButtonBlock,
+    /flex\s*:\s*none/,
+    'discussion footer buttons should stop competing for horizontal space'
+  );
+  assert.match(
+    discussionLogBlock,
+    /max-height\s*:\s*36px/,
+    'discussion mode should aggressively compress the activity log in ultra narrow sidepanel layouts to leave room for primary actions'
+  );
+  assert.match(
+    discussionCopyrightBlock,
+    /display\s*:\s*none/,
+    'discussion mode should hide the copyright footer to prioritize primary actions in the sidepanel viewport'
+  );
+  assert.match(
+    css,
+    /\.discussion-topic-display\s*\{[\s\S]*?padding\s*:\s*12px/,
+    'discussion topic display should use tighter padding for the sidepanel layout'
+  );
+  assert.match(
+    css,
+    /\.discussion-status\s*\{[\s\S]*?padding\s*:\s*10px\s+12px/,
+    'discussion status should use tighter padding for the sidepanel layout'
   );
 });

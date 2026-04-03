@@ -591,6 +591,11 @@ git add sidepanel/panel.css tests/panel-discussion.test.mjs tests/panel-normal-m
 git commit -m "style: add shared long-text panel container"
 ```
 
+## Related Specs
+
+- `docs/superpowers/specs/2026-04-02-long-text-display-design.md` — 长文本展示统一设计
+- `docs/superpowers/specs/2026-04-03-discussion-responsive-spec.md` — discussion 模式“主操作优先”响应式规范，补充真宿主空间约束与回归测试策略
+
 ## Self-Review Checklist
 
 - Spec coverage:

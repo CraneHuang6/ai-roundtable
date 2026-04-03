@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const PANEL_JS = 'D:/Coding/ai-roundtable/.worktrees/long-text-display/sidepanel/panel.js';
+const PANEL_JS = new URL('../sidepanel/panel.js', import.meta.url);
 
 function extractLongTextId(html) {
   return html.match(/data-long-text-id="([^"]+)"/)?.[1] ?? null;
@@ -318,7 +318,7 @@ test('log renders long messages inside the shared long-text container', () => {
 });
 
 test('shared long-text preview CSS keeps collapsed content scrollable', () => {
-  const css = fs.readFileSync('D:/Coding/ai-roundtable/.worktrees/long-text-display/sidepanel/panel.css', 'utf8');
+  const css = fs.readFileSync(new URL('../sidepanel/panel.css', import.meta.url), 'utf8');
   const previewBlock = css.match(/\.long-text-preview\s*\{([\s\S]*?)\}/)?.[1] ?? '';
 
   assert.ok(previewBlock, 'expected .long-text-preview styles to exist');
@@ -327,7 +327,7 @@ test('shared long-text preview CSS keeps collapsed content scrollable', () => {
 });
 
 test('shared long-text expanded CSS removes the internal height clamp', () => {
-  const css = fs.readFileSync('D:/Coding/ai-roundtable/.worktrees/long-text-display/sidepanel/panel.css', 'utf8');
+  const css = fs.readFileSync(new URL('../sidepanel/panel.css', import.meta.url), 'utf8');
   const fullBlocks = Array.from(css.matchAll(/\.long-text-full\s*\{([\s\S]*?)\}/g));
   const fullBlock = fullBlocks.at(-1)?.[1] ?? '';
 

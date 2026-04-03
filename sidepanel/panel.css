@@ -709,6 +709,8 @@ header .subtitle {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .discussion-summary {
@@ -858,6 +860,7 @@ header .subtitle {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-bottom: 12px;
 }
 
@@ -865,6 +868,8 @@ header .subtitle {
   display: flex;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .round-badge {
@@ -900,6 +905,7 @@ header .subtitle {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex-shrink: 0;
 }
 
 .end-btn svg {
@@ -919,7 +925,7 @@ header .subtitle {
 .discussion-topic-display {
   background: var(--bg-glass);
   backdrop-filter: blur(var(--blur-glass));
-  padding: 14px;
+  padding: 12px;
   border-radius: 12px;
   font-size: 13px;
   color: var(--text-secondary);
@@ -932,7 +938,7 @@ header .subtitle {
 
 .discussion-status {
   text-align: center;
-  padding: 14px;
+  padding: 10px 12px;
   color: var(--text-muted);
   font-size: 13px;
   flex-shrink: 0;
@@ -959,6 +965,7 @@ header .subtitle {
   gap: 8px;
   margin-top: 12px;
   min-height: 0;
+  flex-shrink: 0;
 }
 
 .discussion-interject label {
@@ -968,7 +975,7 @@ header .subtitle {
 }
 
 #interject-input {
-  flex: 1;
+  flex: none;
   padding: 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
@@ -977,8 +984,9 @@ header .subtitle {
   color: var(--text-primary);
   font-family: 'IBM Plex Sans', sans-serif;
   font-size: 13px;
-  resize: none;
-  min-height: 70px;
+  resize: vertical;
+  min-height: 56px;
+  max-height: 120px;
   line-height: 1.5;
   transition: all var(--transition-base);
 }
@@ -1000,6 +1008,7 @@ header .subtitle {
 }
 
 #interject-btn {
+  width: 100%;
   padding: 10px 20px;
   background: var(--bg-glass);
   backdrop-filter: blur(var(--blur-glass));
@@ -1012,6 +1021,7 @@ header .subtitle {
   transition: all var(--transition-fast);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
 }
 
@@ -1037,7 +1047,8 @@ header .subtitle {
 
 .discussion-controls {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);
@@ -1045,7 +1056,9 @@ header .subtitle {
 }
 
 .discussion-controls button {
-  flex: 1;
+  width: 100%;
+  flex: none;
+  min-width: 0;
   padding: 12px;
   border: none;
   border-radius: 10px;
@@ -1104,6 +1117,14 @@ header .subtitle {
   color: var(--text-muted);
   border-color: var(--border-subtle);
   cursor: not-allowed;
+}
+
+#discussion-mode:not(.hidden) ~ .log {
+  max-height: 36px;
+}
+
+#discussion-mode:not(.hidden) ~ .copyright {
+  display: none;
 }
 
 /* Discussion Summary */
@@ -1266,6 +1287,65 @@ header .subtitle {
 
 .discussion-status.waiting {
   animation: pulse 2s ease-in-out infinite;
+}
+
+@media (max-width: 420px) {
+  #discussion-mode {
+    gap: 10px;
+  }
+
+  .discussion-header {
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .discussion-info,
+  .end-btn {
+    width: 100%;
+  }
+
+  .discussion-info {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .discussion-topic-display {
+    padding: 12px;
+    font-size: 12px;
+  }
+
+  .discussion-status {
+    padding: 10px 12px;
+  }
+
+  .discussion-interject {
+    gap: 6px;
+  }
+
+  #interject-input {
+    min-height: 56px;
+    padding: 10px 12px;
+  }
+
+  .interject-actions {
+    justify-content: stretch;
+  }
+
+  #interject-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .discussion-controls {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .discussion-controls button {
+    width: 100%;
+    flex: none;
+  }
 }
 
 /* Reduced motion */
