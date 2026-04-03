@@ -60,6 +60,8 @@
   setupResponseObserver();
 
   async function injectMessage(text) {
+    console.log('[AI Panel] Gemini injectMessage called, text length:', text.length);
+
     // Gemini uses a rich text editor (contenteditable or textarea)
     const inputSelectors = [
       '.ql-editor',
@@ -74,40 +76,77 @@
     let inputEl = null;
     for (const selector of inputSelectors) {
       inputEl = document.querySelector(selector);
-      if (inputEl && isVisible(inputEl)) break;
+      if (inputEl && isVisible(inputEl)) {
+        console.log('[AI Panel] Gemini found input element with selector:', selector);
+        break;
+      }
     }
 
     if (!inputEl) {
+      console.error('[AI Panel] Gemini could not find input field');
       throw new Error('Could not find input field');
     }
 
     // Focus the input
     inputEl.focus();
+    console.log('[AI Panel] Gemini input focused, tagName:', inputEl.tagName);
 
     // Handle different input types
     if (inputEl.tagName === 'TEXTAREA') {
       inputEl.value = text;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
       inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      inputEl.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+      inputEl.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      console.log('[AI Panel] Gemini text set in textarea, value length:', inputEl.value.length);
     } else {
       // Contenteditable div (Quill editor or similar)
       inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      console.log('[AI Panel] Gemini text set in contenteditable, innerHTML length:', inputEl.innerHTML.length);
     }
 
-    // Small delay to let the UI process
-    await sleep(150);
+    // Longer delay to let the UI process and enable send button
+    await sleep(300);
 
     // Find and click the send button
     const sendButton = findSendButton();
     if (!sendButton) {
+      console.error('[AI Panel] Gemini could not find send button');
       throw new Error('Could not find send button');
     }
+
+    console.log('[AI Panel] Gemini found send button, disabled:', sendButton.disabled, 'aria-label:', sendButton.getAttribute('aria-label'));
 
     // Wait for button to be enabled
     await waitForButtonEnabled(sendButton);
 
+    console.log('[AI Panel] Gemini clicking send button, disabled:', sendButton.disabled);
     sendButton.click();
+    console.log('[AI Panel] Gemini send button clicked');
+
+    // Fallback: try keyboard shortcut if button click might have failed
+    await sleep(200);
+
+    // Check if input still has content (button click failed)
+    if (inputEl.value === text || inputEl.innerHTML.includes(text.substring(0, 50))) {
+      console.log('[AI Panel] Gemini input still has content, trying keyboard shortcut');
+      inputEl.focus();
+
+      // Try Ctrl+Enter (common shortcut for send)
+      const enterEvent = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true
+      });
+      inputEl.dispatchEvent(enterEvent);
+      console.log('[AI Panel] Gemini sent Ctrl+Enter keyboard event');
+    }
 
     // Start capturing response after sending
     console.log('[AI Panel] Gemini message sent, starting response capture...');
@@ -161,10 +200,14 @@
     return null;
   }
 
-  async function waitForButtonEnabled(button, maxWait = 2000) {
+  async function waitForButtonEnabled(button, maxWait = 5000) {
     const start = Date.now();
     while (button.disabled && Date.now() - start < maxWait) {
-      await sleep(50);
+      await sleep(100);
+    }
+
+    if (button.disabled) {
+      console.log('[AI Panel] Gemini send button still disabled after waiting, attempting click anyway');
     }
   }
 

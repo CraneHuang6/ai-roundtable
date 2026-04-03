@@ -204,6 +204,7 @@
 
   async function waitForStreamingComplete() {
     console.log('[AI Panel] ChatGPT waitForStreamingComplete called, isCapturing:', isCapturing);
+    console.log('[AI Panel] ChatGPT capture version: 2026-04-04-v2 (action buttons + 30s fallback)');
 
     if (isCapturing) {
       console.log('[AI Panel] ChatGPT already capturing, skipping...');
@@ -212,14 +213,15 @@
     isCapturing = true;
     console.log('[AI Panel] ChatGPT starting capture loop...');
 
-    let previousContent = '';
-    let stableCount = 0;
-    const maxWait = 600000;  // 10 minutes - AI responses can be very long
+    let previousLength = 0;
+    let lengthStableCount = 0;
+    let actionButtonsSeenCount = 0;
+    const maxWait = 600000;  // 10 minutes
     const checkInterval = 500;
-    const stableThreshold = 4;  // 2 seconds of stable content
-
+    const lengthStableThreshold = 60;  // 30 seconds fallback
+    const actionButtonsThreshold = 4;  // 2 seconds with buttons
     const startTime = Date.now();
-    let firstContentTime = null;  // Track when we first see content
+    let firstContentTime = null;
 
     try {
       while (Date.now() - startTime < maxWait) {
@@ -230,35 +232,70 @@
 
         await sleep(checkInterval);
 
-        const isStreaming = document.querySelector('button[aria-label*="Stop"]') ||
-                           document.querySelector('button[data-testid="stop-button"]') ||
-                           document.querySelector('[data-testid="stop-button"]') ||
-                           document.querySelector('button[aria-label*="Stop generating"]');
-
         const currentContent = getLatestResponse() || '';
+        const currentLength = currentContent.length;
 
         // Track when content first appears
-        if (currentContent.length > 0 && firstContentTime === null) {
+        if (currentLength > 0 && firstContentTime === null) {
           firstContentTime = Date.now();
-          console.log('[AI Panel] ChatGPT first content detected, length:', currentContent.length);
+          console.log('[AI Panel] ChatGPT first content detected, length:', currentLength);
         }
 
-        // Debug: log every 10 seconds
-        const elapsed = Date.now() - startTime;
-        if (elapsed % 10000 < checkInterval) {
-          console.log(`[AI Panel] ChatGPT check: contentLen=${currentContent.length}, stableCount=${stableCount}, elapsed=${Math.round(elapsed/1000)}s, streaming=${Boolean(isStreaming)}`);
+        // Strategy 1: Detect action buttons (copy, like, dislike, share, regenerate)
+        // These appear when message is complete
+        const containers = document.querySelectorAll('[data-message-author-role="assistant"]');
+        let hasActionButtons = false;
+
+        if (containers.length > 0) {
+          const lastContainer = containers[containers.length - 1];
+
+          // Look for the action button group - usually appears after the message
+          // Try multiple strategies to find buttons
+          const buttonGroup = lastContainer.parentElement?.querySelector('[class*="group"]') ||
+                             lastContainer.nextElementSibling;
+
+          if (buttonGroup) {
+            const buttons = buttonGroup.querySelectorAll('button');
+            hasActionButtons = buttons.length >= 3;  // Usually 4-5 buttons when complete
+
+            if (hasActionButtons) {
+              actionButtonsSeenCount++;
+              console.log(`[AI Panel] ChatGPT action buttons detected (${buttons.length} buttons), count: ${actionButtonsSeenCount}/${actionButtonsThreshold}`);
+
+              if (actionButtonsSeenCount >= actionButtonsThreshold) {
+                if (currentContent !== lastCapturedContent) {
+                  lastCapturedContent = currentContent;
+                  console.log('[AI Panel] ChatGPT capturing response (action buttons confirmed), final length:', currentLength);
+                  safeSendMessage({
+                    type: 'RESPONSE_CAPTURED',
+                    aiType: AI_TYPE,
+                    content: currentContent
+                  });
+                  console.log('[AI Panel] ChatGPT response captured and sent!');
+                } else {
+                  console.log('[AI Panel] ChatGPT content same as last capture, skipping');
+                }
+                return;
+              }
+            } else {
+              actionButtonsSeenCount = 0;
+            }
+          }
         }
 
-        // Content is stable when content unchanged and has content
-        const contentStable = currentContent === previousContent && currentContent.length > 0;
+        // Strategy 2: Fallback - length stability with long threshold
+        if (currentLength === previousLength && currentLength > 0) {
+          lengthStableCount++;
 
-        if (!isStreaming && contentStable) {
-          stableCount++;
-          // Capture after 4 stable checks (2 seconds of stable content)
-          if (stableCount >= stableThreshold) {
+          if (lengthStableCount % 10 === 0) {
+            console.log(`[AI Panel] ChatGPT length stable: ${lengthStableCount}/${lengthStableThreshold}, size=${currentLength}, buttons=${hasActionButtons}`);
+          }
+
+          // Capture when length stable for 30 seconds (fallback)
+          if (lengthStableCount >= lengthStableThreshold) {
             if (currentContent !== lastCapturedContent) {
               lastCapturedContent = currentContent;
-              console.log('[AI Panel] ChatGPT capturing response, length:', currentContent.length);
+              console.log('[AI Panel] ChatGPT capturing response (length stable fallback), final length:', currentLength);
               safeSendMessage({
                 type: 'RESPONSE_CAPTURED',
                 aiType: AI_TYPE,
@@ -270,11 +307,16 @@
             }
             return;
           }
-        } else {
-          stableCount = 0;
+        } else if (currentLength > previousLength) {
+          // Length increased - reset counters
+          if (lengthStableCount > 0) {
+            console.log(`[AI Panel] ChatGPT length increased (${previousLength} -> ${currentLength}), resetting counters`);
+          }
+          lengthStableCount = 0;
+          actionButtonsSeenCount = 0;
         }
 
-        previousContent = currentContent;
+        previousLength = currentLength;
       }
       console.log('[AI Panel] ChatGPT capture timeout after', maxWait/1000, 'seconds');
     } finally {
