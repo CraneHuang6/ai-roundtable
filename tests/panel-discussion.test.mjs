@@ -261,6 +261,8 @@ function loadPanel() {
     startDiscussion,
     nextRound,
     handleInterject,
+    handleCrossReference,
+    handleMutualReview,
     generateSummary,
     showSummary
   };
@@ -359,6 +361,136 @@ test('discussion mode uses Chinese prompts in start and next-round cross-evaluat
   assert.ok(crossEvalMessages.every((message) => message.includes('请评价')));
   assert.ok(crossEvalMessages.every((message) => !message.includes('Please evaluate this response')));
   assert.ok(crossEvalMessages.every((message) => !message.includes('Here is ')));
+});
+
+test('discussion mode can complete a round by polling pending responses when push capture is missing', async () => {
+  const panel = loadPanel();
+  panel.setSelectedParticipants(['chatgpt', 'claude']);
+  panel.setLatestResponses({
+    chatgpt: '旧的 ChatGPT 回复',
+    claude: '旧的 Claude 回复'
+  });
+  panel.getElementById('discussion-topic').value = '后台标签页结束检测';
+
+  await panel.api.startDiscussion();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: 'ChatGPT 后台标签页完整回复',
+      claude: 'Claude 后台标签页完整回复'
+    });
+  }, 200);
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  const state = panel.api.getDiscussionState();
+
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(state.history.length, 2);
+  assert.equal(state.history.find((entry) => entry.ai === 'chatgpt')?.content, 'ChatGPT 后台标签页完整回复');
+  assert.equal(state.history.find((entry) => entry.ai === 'claude')?.content, 'Claude 后台标签页完整回复');
+  assert.match(panel.getElementById('discussion-status').textContent, /第 1 轮完成/);
+});
+
+test('discussion mode does not complete a round when polling only sees baseline responses', async () => {
+  const panel = loadPanel();
+  panel.setSelectedParticipants(['chatgpt', 'claude']);
+  panel.setLatestResponses({
+    chatgpt: '旧的 ChatGPT 回复',
+    claude: '旧的 Claude 回复'
+  });
+  panel.getElementById('discussion-topic').value = '旧回复不应误判';
+
+  await panel.api.startDiscussion();
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  const state = panel.api.getDiscussionState();
+
+  assert.equal(state.pendingResponses.size, 2);
+  assert.equal(state.history.length, 0);
+  assert.match(panel.getElementById('discussion-status').textContent, /等待/);
+});
+
+test('discussion summary waits for fuller pushed responses before finalizing the summary view', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+  panel.setLatestResponses({
+    chatgpt: '旧的 ChatGPT 回复',
+    gemini: '旧的 Gemini 回复'
+  });
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '总结不能截断',
+    participants: ['chatgpt', 'gemini'],
+    currentRound: 1,
+    history: [
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 历史观点' },
+      { round: 1, ai: 'gemini', type: 'initial', content: 'Gemini 历史观点' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'cross-eval'
+  });
+
+  const chatgptPartial = 'ChatGPT 总结第一段';
+  const chatgptFull = 'ChatGPT 总结第一段\n\nChatGPT 总结第二段完整结论';
+  const geminiPartial = 'Gemini 总结第一段';
+  const geminiFull = 'Gemini 总结第一段\n\nGemini 总结第二段完整结论';
+
+  await panel.api.generateSummary();
+
+  setTimeout(() => {
+    listener({ type: 'RESPONSE_CAPTURED', aiType: 'chatgpt', content: chatgptPartial });
+    listener({ type: 'RESPONSE_CAPTURED', aiType: 'gemini', content: geminiPartial });
+  }, 200);
+
+  setTimeout(() => {
+    listener({ type: 'RESPONSE_CAPTURED', aiType: 'chatgpt', content: chatgptFull });
+    listener({ type: 'RESPONSE_CAPTURED', aiType: 'gemini', content: geminiFull });
+  }, 900);
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  assert.equal(panel.api.getDiscussionState().active, true);
+
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+
+  const state = panel.api.getDiscussionState();
+  const summaryEntries = state.history.filter((entry) => entry.type === 'summary');
+
+  assert.equal(state.active, false);
+  assert.equal(summaryEntries.find((entry) => entry.ai === 'chatgpt')?.content, chatgptFull);
+  assert.equal(summaryEntries.find((entry) => entry.ai === 'gemini')?.content, geminiFull);
+});
+
+test('cross reference treats whitespace-only source responses as missing', async () => {
+  const panel = loadPanel();
+  panel.setLatestResponses({
+    chatgpt: '   \n  '
+  });
+
+  await panel.api.handleCrossReference({
+    crossRef: true,
+    mentions: ['claude', 'chatgpt'],
+    targetAIs: ['claude'],
+    sourceAIs: ['chatgpt'],
+    originalMessage: '请评价一下'
+  });
+
+  const sentMessages = panel.getSentMessages().filter((message) => message.type === 'SEND_MESSAGE');
+  assert.equal(sentMessages.length, 0);
+});
+
+test('mutual review treats whitespace-only participant responses as missing', async () => {
+  const panel = loadPanel();
+  panel.setLatestResponses({
+    claude: 'Claude 已回复',
+    chatgpt: '   \n '
+  });
+
+  await panel.api.handleMutualReview(['claude', 'chatgpt'], '请评价以上观点');
+
+  const sentMessages = panel.getSentMessages().filter((message) => message.type === 'SEND_MESSAGE');
+  assert.equal(sentMessages.length, 0);
 });
 
 test('discussion topic renders long text through the shared long-text container', async () => {

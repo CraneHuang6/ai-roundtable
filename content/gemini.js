@@ -104,6 +104,8 @@
       inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
       inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      inputEl.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+      inputEl.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
       console.log('[AI Panel] Gemini text set in contenteditable, innerHTML length:', inputEl.innerHTML.length);
     }
 

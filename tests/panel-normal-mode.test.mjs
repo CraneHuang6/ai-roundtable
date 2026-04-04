@@ -205,7 +205,13 @@ function loadPanel(responseMap = {}) {
       sendMessage(message, callback) {
         sentMessages.push(message);
         if (message.type === 'GET_RESPONSE') {
-          callback?.({ content: responseMap[message.aiType] || null });
+          const entry = responseMap[message.aiType];
+          if (Array.isArray(entry)) {
+            const next = entry.length > 1 ? entry.shift() : entry[0] ?? null;
+            callback?.({ content: next || null });
+            return;
+          }
+          callback?.({ content: entry || null });
           return;
         }
         callback?.({ success: true, content: null });
@@ -243,6 +249,7 @@ function loadPanel(responseMap = {}) {
 
   const source = fs.readFileSync(PANEL_JS, 'utf8') + `
   globalThis.__panelTest = {
+    handleSend,
     handleCrossReference,
     handleMutualReview,
     log
@@ -256,6 +263,7 @@ function loadPanel(responseMap = {}) {
     api: context.__panelTest,
     getElementById: (id) => document.getElementById(id),
     querySelector: (selector) => document.querySelector(selector),
+    getRuntimeMessages: () => sentMessages,
     getSentMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE')
   };
 }
@@ -334,4 +342,39 @@ test('shared long-text expanded CSS removes the internal height clamp', () => {
   assert.ok(fullBlock, 'expected .long-text-full styles to exist');
   assert.match(fullBlock, /max-height\s*:\s*none/, 'expected expanded content to remove the fixed height limit');
   assert.match(fullBlock, /overflow\s*:\s*visible/, 'expected expanded content to stop scrolling internally');
+});
+
+test('normal send polls latest responses when push capture is missing', async () => {
+  const panel = loadPanel({
+    claude: ['Claude 的旧回复', 'Claude 的最新回复']
+  });
+
+  panel.getElementById('message-input').value = '请继续';
+  panel.getElementById('target-claude').checked = true;
+
+  await panel.api.handleSend();
+  await new Promise((resolve) => setTimeout(resolve, 700));
+
+  const runtimeMessages = panel.getRuntimeMessages();
+  const sendMessages = runtimeMessages.filter((message) => message.type === 'SEND_MESSAGE' && message.aiType === 'claude');
+  const pullMessages = runtimeMessages.filter((message) => message.type === 'GET_RESPONSE' && message.aiType === 'claude');
+
+  assert.equal(sendMessages.length, 1);
+  assert.equal(panel.getElementById('send-btn').disabled, false);
+  assert.equal(
+    pullMessages.length,
+    2,
+    'expected normal mode to capture a baseline and then actively poll GET_RESPONSE for a newer reply'
+  );
+});
+
+test('panel polling logic uses shared helper for normal and discussion flows', () => {
+  const source = fs.readFileSync(PANEL_JS, 'utf8');
+
+  assert.match(source, /function createPollingController\(/, 'expected a shared polling controller factory');
+  assert.match(source, /function captureResponseBaselines\(/, 'expected a shared baseline capture helper');
+  assert.match(source, /function startResponsePolling\(/, 'expected a shared polling loop helper');
+  assert.match(source, /captureResponseBaselines\(normalPollingController, targets/, 'expected normal mode to use the shared baseline helper');
+  assert.match(source, /captureResponseBaselines\(discussionPollingController, selected/, 'expected discussion start to use the shared baseline helper');
+  assert.match(source, /captureResponseBaselines\(discussionPollingController, participants/, 'expected discussion follow-up stages to use the shared baseline helper');
 });

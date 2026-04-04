@@ -151,3 +151,22 @@ test('chatgpt capture waits for streaming to stop before capturing the full resp
   assert.equal(captures.length, 1);
   assert.equal(captures[0].content, '开头框架。\n\n完整结论与展开内容。');
 });
+
+test('chatgpt capture does not wait for the long fallback after streaming stops without action buttons', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: true,
+    currentContent: '开头框架。'
+  };
+
+  const { api, messages } = loadChatgptContent(state);
+
+  await api.waitForStreamingComplete();
+
+  const captures = messages.filter((message) => message.type === 'RESPONSE_CAPTURED');
+
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].content, '开头框架。\n\n完整结论与展开内容。');
+  assert.ok(state.now < 12000, `expected capture before long fallback, got ${state.now}ms`);
+});

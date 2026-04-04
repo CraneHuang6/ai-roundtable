@@ -202,9 +202,20 @@
     }
   }
 
+  function isStreamingActive() {
+    const stopSelectors = [
+      'button[aria-label*="Stop"]',
+      'button[data-testid="stop-button"]',
+      '[data-testid="stop-button"]',
+      'button[aria-label*="Stop generating"]'
+    ];
+
+    return stopSelectors.some(selector => document.querySelector(selector));
+  }
+
   async function waitForStreamingComplete() {
     console.log('[AI Panel] ChatGPT waitForStreamingComplete called, isCapturing:', isCapturing);
-    console.log('[AI Panel] ChatGPT capture version: 2026-04-04-v2 (action buttons + 30s fallback)');
+    console.log('[AI Panel] ChatGPT capture version: 2026-04-04-v3 (action buttons + stream-stop bridge + 30s fallback)');
 
     if (isCapturing) {
       console.log('[AI Panel] ChatGPT already capturing, skipping...');
@@ -216,10 +227,13 @@
     let previousLength = 0;
     let lengthStableCount = 0;
     let actionButtonsSeenCount = 0;
+    let streamEndedStableCount = 0;
+    let streamingSeen = false;
     const maxWait = 600000;  // 10 minutes
     const checkInterval = 500;
     const lengthStableThreshold = 60;  // 30 seconds fallback
     const actionButtonsThreshold = 4;  // 2 seconds with buttons
+    const streamEndedStableThreshold = 3;  // 1.5 seconds after streaming ends
     const startTime = Date.now();
     let firstContentTime = null;
 
@@ -234,6 +248,10 @@
 
         const currentContent = getLatestResponse() || '';
         const currentLength = currentContent.length;
+        const streamingActive = isStreamingActive();
+        if (streamingActive) {
+          streamingSeen = true;
+        }
 
         // Track when content first appears
         if (currentLength > 0 && firstContentTime === null) {
@@ -283,12 +301,33 @@
           }
         }
 
-        // Strategy 2: Fallback - length stability with long threshold
+        // Strategy 2: capture soon after streaming stops if content is stable
         if (currentLength === previousLength && currentLength > 0) {
           lengthStableCount++;
 
+          if (streamingSeen && !streamingActive) {
+            streamEndedStableCount++;
+            if (streamEndedStableCount >= streamEndedStableThreshold) {
+              if (currentContent !== lastCapturedContent) {
+                lastCapturedContent = currentContent;
+                console.log('[AI Panel] ChatGPT capturing response (stream ended + stable), final length:', currentLength);
+                safeSendMessage({
+                  type: 'RESPONSE_CAPTURED',
+                  aiType: AI_TYPE,
+                  content: currentContent
+                });
+                console.log('[AI Panel] ChatGPT response captured and sent!');
+              } else {
+                console.log('[AI Panel] ChatGPT content same as last capture, skipping');
+              }
+              return;
+            }
+          } else {
+            streamEndedStableCount = 0;
+          }
+
           if (lengthStableCount % 10 === 0) {
-            console.log(`[AI Panel] ChatGPT length stable: ${lengthStableCount}/${lengthStableThreshold}, size=${currentLength}, buttons=${hasActionButtons}`);
+            console.log(`[AI Panel] ChatGPT length stable: ${lengthStableCount}/${lengthStableThreshold}, size=${currentLength}, buttons=${hasActionButtons}, streamingActive=${streamingActive}`);
           }
 
           // Capture when length stable for 30 seconds (fallback)
@@ -314,6 +353,9 @@
           }
           lengthStableCount = 0;
           actionButtonsSeenCount = 0;
+          streamEndedStableCount = 0;
+        } else {
+          streamEndedStableCount = 0;
         }
 
         previousLength = currentLength;

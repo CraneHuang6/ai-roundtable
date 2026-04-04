@@ -39,6 +39,23 @@ let discussionState = {
   pendingResponses: new Set(),  // AIs we're waiting for
   roundType: null  // 'initial', 'cross-eval', 'counter'
 };
+function createPollingController() {
+  return {
+    timer: null,
+    baselines: new Map(),
+    pending: new Set(),
+    state: new Map()
+  };
+}
+
+let discussionPollTimer = null;
+let discussionResponseBaselines = new Map();
+let discussionPollingState = new Map();
+let normalResponsePollTimer = null;
+let normalResponseBaselines = new Map();
+let normalPendingResponses = new Set();
+const normalPollingController = createPollingController();
+const discussionPollingController = createPollingController();
 
 const LONG_TEXT_THRESHOLD = 240;
 let longTextIdCounter = 0;
@@ -182,10 +199,13 @@ function setupEventListeners() {
     if (message.type === 'TAB_STATUS_UPDATE') {
       updateTabStatus(message.aiType, message.connected);
     } else if (message.type === 'RESPONSE_CAPTURED') {
-      log(`${message.aiType}: Response captured`, 'success');
       // Handle discussion mode response
       if (discussionState.active && shouldHandleDiscussionCapture(message.aiType)) {
         handleDiscussionResponse(message.aiType, message.content);
+      } else if (shouldHandleNormalCapture(message.aiType, message.content)) {
+        handleNormalResponse(message.aiType, message.content);
+      } else {
+        log(`${message.aiType}: Response captured`, 'success');
       }
     } else if (message.type === 'SEND_RESULT') {
       if (message.success) {
@@ -291,6 +311,9 @@ async function handleSend() {
       await handleCrossReference(parsed);
     } else {
       // Send to target(s)
+      await captureResponseBaselines(normalPollingController, targets, { pending: targets });
+      startNormalResponsePolling();
+
       log(`Sending to: ${targets.join(', ')}`);
       for (const target of targets) {
         await sendToAI(target, message);
@@ -395,17 +418,134 @@ function parseMessage(message) {
   };
 }
 
-async function handleCrossReference(parsed) {
-  // Get responses from all source AIs
-  const sourceResponses = [];
+async function collectRequiredResponses(aiTypes, options = {}) {
+  const responses = [];
+  const errorPrefix = options.errorPrefix || 'Could not get';
+  const errorSuffix = options.errorSuffix || "'s response";
 
-  for (const sourceAI of parsed.sourceAIs) {
-    const response = await getLatestResponse(sourceAI);
-    if (!response) {
-      log(`Could not get ${sourceAI}'s response`, 'error');
+  for (const aiType of aiTypes) {
+    const response = await getLatestResponse(aiType);
+    const normalizedResponse = response?.trim() || '';
+    if (!normalizedResponse) {
+      log(`${errorPrefix} ${aiType}${errorSuffix}`, 'error');
+      return null;
+    }
+    responses.push({ ai: aiType, content: normalizedResponse });
+  }
+
+  return responses;
+}
+
+function syncPollingControllerAliases() {
+  normalResponsePollTimer = normalPollingController.timer;
+  normalResponseBaselines = normalPollingController.baselines;
+  normalPendingResponses = normalPollingController.pending;
+  discussionPollTimer = discussionPollingController.timer;
+  discussionResponseBaselines = discussionPollingController.baselines;
+  discussionPollingState = discussionPollingController.state;
+}
+
+function clearResponsePolling(controller) {
+  if (controller.timer) {
+    clearInterval(controller.timer);
+    controller.timer = null;
+  }
+  syncPollingControllerAliases();
+}
+
+async function captureResponseBaselines(controller, aiTypes, options = {}) {
+  clearResponsePolling(controller);
+  controller.baselines = new Map();
+  controller.pending = options.pending ? new Set(options.pending) : new Set();
+  controller.state = new Map();
+
+  await Promise.all(aiTypes.map(async (ai) => {
+    const response = await getLatestResponse(ai);
+    const normalizedResponse = response?.trim() || '';
+    controller.baselines.set(ai, normalizedResponse);
+    if (options.createState) {
+      controller.state.set(ai, options.createState(ai, normalizedResponse));
+    }
+  }));
+
+  syncPollingControllerAliases();
+}
+
+function startResponsePolling(controller, options) {
+  clearResponsePolling(controller);
+
+  controller.timer = setInterval(async () => {
+    if (options.shouldStop()) {
+      clearResponsePolling(controller);
       return;
     }
-    sourceResponses.push({ ai: sourceAI, content: response });
+
+    const pending = Array.from(controller.pending);
+    for (const ai of pending) {
+      const response = await getLatestResponse(ai);
+      const normalizedResponse = response?.trim() || '';
+      if (!options.shouldAccept(ai, normalizedResponse, controller)) {
+        continue;
+      }
+      options.onAccept(ai, normalizedResponse, controller);
+    }
+
+    syncPollingControllerAliases();
+  }, options.intervalMs ?? 500);
+
+  syncPollingControllerAliases();
+}
+
+function shouldAcceptPolledNormalResponse(aiType, normalizedResponse) {
+  const baseline = normalPollingController.baselines.get(aiType) || '';
+  return Boolean(normalizedResponse) && normalizedResponse !== baseline;
+}
+
+function shouldHandleNormalCapture(aiType, content) {
+  if (!normalPollingController.pending.has(aiType)) {
+    return false;
+  }
+
+  return shouldAcceptPolledNormalResponse(aiType, content?.trim() || '');
+}
+
+function handleNormalResponse(aiType, content) {
+  const normalizedResponse = content?.trim() || '';
+  if (!shouldAcceptPolledNormalResponse(aiType, normalizedResponse)) {
+    return;
+  }
+
+  normalPollingController.baselines.set(aiType, normalizedResponse);
+  normalPollingController.pending.delete(aiType);
+  syncPollingControllerAliases();
+  log(`${aiType}: Response captured`, 'success');
+
+  if (normalPollingController.pending.size === 0) {
+    clearResponsePolling(normalPollingController);
+  }
+}
+
+function clearNormalResponsePolling() {
+  clearResponsePolling(normalPollingController);
+}
+
+async function captureNormalBaselines(aiTypes) {
+  await captureResponseBaselines(normalPollingController, aiTypes);
+}
+
+function startNormalResponsePolling() {
+  startResponsePolling(normalPollingController, {
+    shouldStop: () => normalPollingController.pending.size === 0,
+    shouldAccept: (ai, normalizedResponse) => shouldAcceptPolledNormalResponse(ai, normalizedResponse),
+    onAccept: (ai, normalizedResponse) => handleNormalResponse(ai, normalizedResponse)
+  });
+}
+
+async function handleCrossReference(parsed) {
+  // Get responses from all source AIs
+  const sourceResponses = await collectRequiredResponses(parsed.sourceAIs);
+  if (!sourceResponses) {
+    return;
   }
 
   // Build the full message with XML tags for each source
@@ -434,14 +574,17 @@ async function handleMutualReview(participants, prompt) {
 
   log(`[Mutual] Fetching responses from ${participants.join(', ')}...`);
 
-  for (const ai of participants) {
-    const response = await getLatestResponse(ai);
-    if (!response || response.trim().length === 0) {
-      log(`[Mutual] Could not get ${ai}'s response - make sure ${ai} has replied first`, 'error');
-      return;
-    }
-    responses[ai] = response;
-    log(`[Mutual] Got ${ai}'s response (${response.length} chars)`);
+  const responseEntries = await collectRequiredResponses(participants, {
+    errorPrefix: '[Mutual] Could not get',
+    errorSuffix: "'s response - make sure it has replied first"
+  });
+  if (!responseEntries) {
+    return;
+  }
+
+  for (const entry of responseEntries) {
+    responses[entry.ai] = entry.content;
+    log(`[Mutual] Got ${entry.ai}'s response (${entry.content.length} chars)`);
   }
 
   log(`[Mutual] All responses collected. Sending cross-evaluations...`);
@@ -591,6 +734,15 @@ async function startDiscussion() {
     roundType: 'initial'
   };
 
+  await captureResponseBaselines(discussionPollingController, selected, {
+    pending: discussionState.pendingResponses,
+    createState: (_ai, normalizedResponse) => ({
+      lastObserved: normalizedResponse,
+      stableCount: 0
+    })
+  });
+  startDiscussionResponsePolling();
+
   // Update UI
   document.getElementById('discussion-setup').classList.add('hidden');
   document.getElementById('discussion-active').classList.remove('hidden');
@@ -672,6 +824,7 @@ function handleDiscussionResponse(aiType, content) {
 }
 
 function onRoundComplete() {
+  clearDiscussionPolling();
   log(`第 ${discussionState.currentRound} 轮完成`, 'success');
   updateDiscussionStatus('ready', `第 ${discussionState.currentRound} 轮完成，可以进入下一轮`);
 
@@ -707,6 +860,15 @@ async function nextRound() {
   // Set pending responses
   discussionState.pendingResponses = new Set(participants);
   discussionState.roundType = 'cross-eval';
+
+  await captureResponseBaselines(discussionPollingController, participants, {
+    pending: discussionState.pendingResponses,
+    createState: (_ai, normalizedResponse) => ({
+      lastObserved: normalizedResponse,
+      stableCount: 0
+    })
+  });
+  startDiscussionResponsePolling();
 
   updateDiscussionStatus('waiting', `第 ${discussionState.currentRound} 轮：各方继续讨论...`);
 
@@ -816,23 +978,52 @@ ${historyText}`;
   discussionState.roundType = 'summary';
   discussionState.pendingResponses = new Set(participants);
 
+  await captureResponseBaselines(discussionPollingController, participants, {
+    pending: discussionState.pendingResponses,
+    createState: (_ai, normalizedResponse) => ({
+      lastObserved: normalizedResponse,
+      stableCount: 0
+    })
+  });
+  startDiscussionResponsePolling();
+
   log(`[Summary] 正在请求各方生成总结...`);
   for (const ai of participants) {
     await sendToAI(ai, summaryPrompt);
   }
 
-  // Wait for all responses, then show summary
+  // Wait for all responses, then allow a short settle window for fuller updates
+  const settleWindowMs = 1500;
+  let settleStartedAt = null;
+  let lastSignature = '';
+
   const checkForSummary = setInterval(async () => {
+    const summaries = discussionState.history.filter(h => h.type === 'summary');
+    const summaryArgs = participants.map(ai => summaries.find(s => s.ai === ai)?.content || '');
+    const signature = summaryArgs.join('\n<summary-split>\n');
+
     if (discussionState.pendingResponses.size === 0) {
-      clearInterval(checkForSummary);
+      if (signature !== lastSignature) {
+        lastSignature = signature;
+        settleStartedAt = Date.now();
+        return;
+      }
 
-      // Get all summaries
-      const summaries = discussionState.history.filter(h => h.type === 'summary');
-      const summaryArgs = participants.map(ai => summaries.find(s => s.ai === ai)?.content || '');
+      if (settleStartedAt === null) {
+        settleStartedAt = Date.now();
+        return;
+      }
 
-      log(`[Summary] 各方总结已生成`, 'success');
-      showSummary(...summaryArgs);
+      if (Date.now() - settleStartedAt >= settleWindowMs) {
+        clearInterval(checkForSummary);
+        log(`[Summary] 各方总结已生成`, 'success');
+        showSummary(...summaryArgs);
+      }
+      return;
     }
+
+    settleStartedAt = null;
+    lastSignature = signature;
   }, 500);
 }
 
@@ -892,6 +1083,8 @@ function endDiscussion() {
 }
 
 function resetDiscussion() {
+  clearDiscussionPolling();
+  discussionResponseBaselines = new Map();
   discussionState = {
     active: false,
     topic: '',
@@ -917,6 +1110,53 @@ function updateDiscussionStatus(state, text) {
   const statusEl = document.getElementById('discussion-status');
   statusEl.textContent = text;
   statusEl.className = 'discussion-status ' + state;
+}
+
+function clearDiscussionPolling() {
+  clearResponsePolling(discussionPollingController);
+}
+
+function shouldAcceptPolledDiscussionResponse(ai, normalizedResponse) {
+  const baseline = discussionResponseBaselines.get(ai) || '';
+  if (!normalizedResponse || normalizedResponse === baseline) {
+    return false;
+  }
+
+  if (discussionState.roundType !== 'summary') {
+    return true;
+  }
+
+  const pollingState = discussionPollingState.get(ai) || { lastObserved: baseline, stableCount: 0 };
+
+  if (normalizedResponse.length > pollingState.lastObserved.length) {
+    pollingState.lastObserved = normalizedResponse;
+    pollingState.stableCount = 0;
+    discussionPollingState.set(ai, pollingState);
+    return false;
+  }
+
+  if (normalizedResponse === pollingState.lastObserved) {
+    pollingState.stableCount += 1;
+    discussionPollingState.set(ai, pollingState);
+    return pollingState.stableCount >= 2;
+  }
+
+  pollingState.lastObserved = normalizedResponse;
+  pollingState.stableCount = 0;
+  discussionPollingState.set(ai, pollingState);
+  return false;
+}
+
+function startDiscussionResponsePolling() {
+  startResponsePolling(discussionPollingController, {
+    shouldStop: () => !discussionState.active || discussionState.pendingResponses.size === 0,
+    shouldAccept: (ai, normalizedResponse) => shouldAcceptPolledDiscussionResponse(ai, normalizedResponse),
+    onAccept: (ai, normalizedResponse) => {
+      discussionPollingController.baselines.set(ai, normalizedResponse);
+      syncPollingControllerAliases();
+      handleDiscussionResponse(ai, normalizedResponse);
+    }
+  });
 }
 
 function capitalize(str) {
