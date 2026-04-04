@@ -5,19 +5,80 @@ import vm from 'node:vm';
 
 const PANEL_JS = new URL('../sidepanel/panel.js', import.meta.url);
 const PANEL_CSS = new URL('../sidepanel/panel.css', import.meta.url);
+const loadedPanels = new Set();
+
+test.afterEach(() => {
+  for (const panel of loadedPanels) {
+    panel.dispose?.();
+  }
+  loadedPanels.clear();
+});
 
 function extractLongTextId(html) {
   return html.match(/data-long-text-id="([^"]+)"/)?.[1] ?? null;
 }
 
-function loadPanel() {
+function loadPanel(options = {}) {
   const elementCache = new Map();
   const longTextNodes = new Map();
   const domReadyCallbacks = [];
   const sentMessages = [];
   const latestResponses = new Map();
+  const activeIntervals = new Set();
+  const activeTimeouts = new Set();
+  let nextTimerId = 1;
   let selectedParticipants = [];
   let onMessageListener = null;
+
+  function createTrackedTimer(type, callback, ms = 0) {
+    const handle = { id: nextTimerId++, type, callback, ms };
+    if (type === 'interval') {
+      activeIntervals.add(handle);
+    } else {
+      activeTimeouts.add(handle);
+    }
+    return handle;
+  }
+
+  function trackedSetInterval(callback, ms = 0) {
+    if (options.auditTimers) {
+      return createTrackedTimer('interval', callback, ms);
+    }
+
+    const handle = setInterval(callback, ms);
+    activeIntervals.add(handle);
+    return handle;
+  }
+
+  function trackedClearInterval(handle) {
+    if (!handle) return;
+    activeIntervals.delete(handle);
+    if (!options.auditTimers) {
+      clearInterval(handle);
+    }
+  }
+
+  function trackedSetTimeout(callback, ms = 0) {
+    if (options.auditTimers) {
+      return createTrackedTimer('timeout', callback, ms);
+    }
+
+    let handle = null;
+    handle = setTimeout(() => {
+      activeTimeouts.delete(handle);
+      callback();
+    }, ms);
+    activeTimeouts.add(handle);
+    return handle;
+  }
+
+  function trackedClearTimeout(handle) {
+    if (!handle) return;
+    activeTimeouts.delete(handle);
+    if (!options.auditTimers) {
+      clearTimeout(handle);
+    }
+  }
 
   function syncChildren(element) {
     element.firstChild = element.children[0] ?? null;
@@ -234,10 +295,10 @@ function loadPanel() {
     document,
     chrome,
     confirm: () => true,
-    setInterval,
-    clearInterval,
-    setTimeout,
-    clearTimeout,
+    setInterval: trackedSetInterval,
+    clearInterval: trackedClearInterval,
+    setTimeout: trackedSetTimeout,
+    clearTimeout: trackedClearTimeout,
     Date,
     Promise,
     Map,
@@ -276,13 +337,23 @@ function loadPanel() {
   vm.runInContext(source, context);
   domReadyCallbacks.forEach((callback) => callback());
 
-  return {
+  const panel = {
     api: context.__panelTest,
     getElementById: (id) => document.getElementById(id),
     querySelector: (selector) => document.querySelector(selector),
     getOnMessageListener: () => onMessageListener,
     getSentMessages: () => sentMessages,
     getDiscussionMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE'),
+    getActiveIntervalCount: () => activeIntervals.size,
+    getActiveTimeoutCount: () => activeTimeouts.size,
+    dispose() {
+      for (const handle of Array.from(activeIntervals)) {
+        trackedClearInterval(handle);
+      }
+      for (const handle of Array.from(activeTimeouts)) {
+        trackedClearTimeout(handle);
+      }
+    },
     setSelectedParticipants: (participants) => {
       selectedParticipants = [...participants];
     },
@@ -291,7 +362,26 @@ function loadPanel() {
       Object.entries(responses).forEach(([ai, content]) => latestResponses.set(ai, content));
     }
   };
+
+  loadedPanels.add(panel);
+  return panel;
 }
+
+test('panel test harness can dispose active discussion timers after each test', async () => {
+  const panel = loadPanel({ auditTimers: true });
+  panel.setSelectedParticipants(['chatgpt', 'claude']);
+  panel.getElementById('discussion-topic').value = 'timer cleanup';
+
+  await panel.api.startDiscussion();
+
+  assert.ok(panel.getActiveIntervalCount() > 0);
+  assert.equal(typeof panel.dispose, 'function');
+
+  panel.dispose();
+
+  assert.equal(panel.getActiveIntervalCount(), 0);
+  assert.equal(panel.getActiveTimeoutCount(), 0);
+});
 
 test('discussion mode keeps the latest fuller capture for the same AI in the same round', () => {
   const panel = loadPanel();
