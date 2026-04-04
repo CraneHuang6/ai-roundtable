@@ -79,7 +79,11 @@ async function getResponseFromContentScript(aiType) {
       type: 'GET_LATEST_RESPONSE'
     });
 
-    return { content: response?.content || null };
+    return {
+      content: response?.content || null,
+      streamingActive: Boolean(response?.streamingActive),
+      captureState: response?.captureState || 'complete'
+    };
   } catch (err) {
     // Fallback to stored response on error
     console.log('[AI Panel] Failed to get response from content script:', err.message);

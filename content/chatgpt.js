@@ -44,7 +44,12 @@
 
     if (message.type === 'GET_LATEST_RESPONSE') {
       const response = getLatestResponse();
-      sendResponse({ content: response });
+      const captureState = getCaptureState();
+      sendResponse({
+        content: response,
+        streamingActive: captureState === 'streaming',
+        captureState
+      });
       return true;
     }
   });
@@ -202,7 +207,7 @@
     }
   }
 
-  function isStreamingActive() {
+  function getCaptureState() {
     const stopSelectors = [
       'button[aria-label*="Stop"]',
       'button[data-testid="stop-button"]',
@@ -210,7 +215,29 @@
       'button[aria-label*="Stop generating"]'
     ];
 
-    return stopSelectors.some(selector => document.querySelector(selector));
+    if (stopSelectors.some(selector => document.querySelector(selector))) {
+      return 'streaming';
+    }
+
+    const containers = document.querySelectorAll('[data-message-author-role="assistant"]');
+    if (containers.length > 0) {
+      const lastContainer = containers[containers.length - 1];
+      const buttonGroup = lastContainer.parentElement?.querySelector('[class*="group"]') ||
+                         lastContainer.nextElementSibling;
+
+      if (buttonGroup) {
+        const buttons = buttonGroup.querySelectorAll('button');
+        if (buttons.length >= 3) {
+          return 'complete';
+        }
+      }
+    }
+
+    return 'unknown';
+  }
+
+  function isStreamingActive() {
+    return getCaptureState() === 'streaming';
   }
 
   async function waitForStreamingComplete() {

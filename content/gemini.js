@@ -323,8 +323,7 @@
 
     if (messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
-      // Use innerText to preserve line breaks
-      const content = lastMessage.innerText.trim();
+      const content = (lastMessage.innerText || lastMessage.textContent || '').trim();
       console.log('[AI Panel] Gemini response found, length:', content.length);
       return content;
     }
@@ -333,7 +332,7 @@
     const fallback = document.querySelectorAll('message-content');
     if (fallback.length > 0) {
       const lastMessage = fallback[fallback.length - 1];
-      const content = lastMessage.innerText.trim();
+      const content = (lastMessage.innerText || lastMessage.textContent || '').trim();
       console.log('[AI Panel] Gemini response (fallback), length:', content.length);
       return content;
     }

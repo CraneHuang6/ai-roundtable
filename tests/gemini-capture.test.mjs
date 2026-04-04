@@ -36,6 +36,10 @@ function createElement() {
   };
 }
 
+function getVisibleText(value) {
+  return String(value ?? '').trim();
+}
+
 function loadGeminiContent(state) {
   const messages = [];
   const inputEvents = [];
@@ -95,12 +99,15 @@ function loadGeminiContent(state) {
     },
     querySelectorAll(selector) {
       if (selector === '.model-response-text') {
-        if (!state.currentContent) {
+        if (!state.currentContent && !state.currentTextContent) {
           return [];
         }
         return [{
           get innerText() {
-            return state.currentContent;
+            return getVisibleText(state.currentContent);
+          },
+          get textContent() {
+            return state.currentTextContent ?? state.currentContent;
           }
         }];
       }
@@ -184,9 +191,11 @@ function loadGeminiContent(state) {
       }
       if (state.tick === 2) {
         state.currentContent = state.partialContent;
+        state.currentTextContent = state.partialTextContent ?? state.partialContent;
       }
       if (state.tick === 5) {
         state.currentContent = state.fullContent;
+        state.currentTextContent = state.fullTextContent ?? state.fullContent;
       }
       fn();
       return state.tick;
@@ -257,4 +266,27 @@ test('gemini injectMessage fires the full event chain for long contenteditable p
   assert.deepEqual(inputEvents.slice(0, 4), ['input', 'change', 'keydown', 'keyup']);
   assert.equal(sendButton.disabled, false);
   assert.equal(sendButton.clicked, true);
+});
+
+test('gemini capture falls back to textContent when innerText stays empty in a background tab', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    currentContent: '',
+    currentTextContent: '',
+    partialContent: '',
+    partialTextContent: 'Gemini 后台标签页第一段总结',
+    fullContent: '',
+    fullTextContent: 'Gemini 后台标签页第一段总结\n\nGemini 后台标签页第二段完整结论'
+  };
+
+  const { api, messages, responseNode } = loadGeminiContent(state);
+
+  api.checkForResponse(responseNode);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const captures = messages.filter((message) => message.type === 'RESPONSE_CAPTURED');
+
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].content, 'Gemini 后台标签页第一段总结\n\nGemini 后台标签页第二段完整结论');
 });

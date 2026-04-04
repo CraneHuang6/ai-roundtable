@@ -276,7 +276,18 @@ function loadPanel(options = {}) {
         sentMessages.push(message);
 
         if (message.type === 'GET_RESPONSE') {
-          callback?.({ success: true, content: latestResponses.get(message.aiType) ?? null });
+          const latestResponse = latestResponses.get(message.aiType) ?? null;
+          if (latestResponse && typeof latestResponse === 'object' && !Array.isArray(latestResponse)) {
+            callback?.({
+              success: true,
+              content: latestResponse.content ?? null,
+              streamingActive: Boolean(latestResponse.streamingActive),
+              captureState: latestResponse.captureState ?? 'complete'
+            });
+            return;
+          }
+
+          callback?.({ success: true, content: latestResponse, streamingActive: false, captureState: 'complete' });
           return;
         }
 
@@ -499,6 +510,94 @@ test('discussion mode does not complete a round when polling only sees baseline 
   assert.equal(state.pendingResponses.size, 2);
   assert.equal(state.history.length, 0);
   assert.match(panel.getElementById('discussion-status').textContent, /等待/);
+});
+
+test('discussion mode does not treat a streaming partial response as round completion or leak its final capture into the next round', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+  panel.setSelectedParticipants(['chatgpt', 'claude']);
+  panel.setLatestResponses({
+    chatgpt: { content: '旧的 ChatGPT 回复', streamingActive: false },
+    claude: { content: '旧的 Claude 回复', streamingActive: false }
+  });
+  panel.getElementById('discussion-topic').value = '流式首轮不应误判完成';
+
+  await panel.api.startDiscussion();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: 'ChatGPT 首轮回复（仍在生成，只有第一段）', streamingActive: true },
+      claude: { content: 'Claude 首轮完整回复', streamingActive: false }
+    });
+  }, 200);
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  let state = panel.api.getDiscussionState();
+  assert.equal(state.currentRound, 1);
+  assert.deepEqual(Array.from(state.pendingResponses), ['chatgpt']);
+  assert.equal(state.history.length, 1);
+  assert.equal(state.history[0].ai, 'claude');
+  assert.equal(state.history[0].content, 'Claude 首轮完整回复');
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+  assert.match(panel.getElementById('discussion-status').textContent, /等待 chatgpt/i);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 首轮回复（完整终稿，包含第二段结论）'
+  });
+
+  state = panel.api.getDiscussionState();
+  const chatgptRoundOne = state.history.filter((entry) => entry.round === 1 && entry.ai === 'chatgpt');
+  const chatgptRoundTwo = state.history.filter((entry) => entry.round === 2 && entry.ai === 'chatgpt');
+
+  assert.equal(chatgptRoundOne.length, 1);
+  assert.equal(chatgptRoundOne[0].content, 'ChatGPT 首轮回复（完整终稿，包含第二段结论）');
+  assert.equal(chatgptRoundTwo.length, 0);
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
+});
+
+test('discussion mode does not complete a round when ChatGPT completion readiness is unknown', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+  panel.setSelectedParticipants(['chatgpt', 'claude']);
+  panel.setLatestResponses({
+    chatgpt: { content: '旧的 ChatGPT 回复', streamingActive: false, captureState: 'complete' },
+    claude: { content: '旧的 Claude 回复', streamingActive: false, captureState: 'complete' }
+  });
+  panel.getElementById('discussion-topic').value = '未知完成态不应提前放行';
+
+  await panel.api.startDiscussion();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: 'ChatGPT 首轮回复（状态未知，不能确认已结束）', streamingActive: false, captureState: 'unknown' },
+      claude: { content: 'Claude 首轮完整回复', streamingActive: false, captureState: 'complete' }
+    });
+  }, 200);
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  let state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['chatgpt']);
+  assert.equal(state.history.length, 1);
+  assert.equal(state.history[0].ai, 'claude');
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 首轮回复（完整终稿，unknown 之后由 push 收口）'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 1 && entry.ai === 'chatgpt')?.content,
+    'ChatGPT 首轮回复（完整终稿，unknown 之后由 push 收口）'
+  );
 });
 
 test('discussion summary waits for fuller pushed responses before finalizing the summary view', async () => {

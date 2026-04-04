@@ -425,7 +425,7 @@ async function collectRequiredResponses(aiTypes, options = {}) {
 
   for (const aiType of aiTypes) {
     const response = await getLatestResponse(aiType);
-    const normalizedResponse = response?.trim() || '';
+    const normalizedResponse = response?.content?.trim() || '';
     if (!normalizedResponse) {
       log(`${errorPrefix} ${aiType}${errorSuffix}`, 'error');
       return null;
@@ -461,10 +461,10 @@ async function captureResponseBaselines(controller, aiTypes, options = {}) {
 
   await Promise.all(aiTypes.map(async (ai) => {
     const response = await getLatestResponse(ai);
-    const normalizedResponse = response?.trim() || '';
+    const normalizedResponse = response?.content?.trim() || '';
     controller.baselines.set(ai, normalizedResponse);
     if (options.createState) {
-      controller.state.set(ai, options.createState(ai, normalizedResponse));
+      controller.state.set(ai, options.createState(ai, normalizedResponse, response));
     }
   }));
 
@@ -483,11 +483,11 @@ function startResponsePolling(controller, options) {
     const pending = Array.from(controller.pending);
     for (const ai of pending) {
       const response = await getLatestResponse(ai);
-      const normalizedResponse = response?.trim() || '';
-      if (!options.shouldAccept(ai, normalizedResponse, controller)) {
+      const normalizedResponse = response?.content?.trim() || '';
+      if (!options.shouldAccept(ai, normalizedResponse, controller, response)) {
         continue;
       }
-      options.onAccept(ai, normalizedResponse, controller);
+      options.onAccept(ai, normalizedResponse, controller, response);
     }
 
     syncPollingControllerAliases();
@@ -618,7 +618,11 @@ async function getLatestResponse(aiType) {
     chrome.runtime.sendMessage(
       { type: 'GET_RESPONSE', aiType },
       (response) => {
-        resolve(response?.content || null);
+        resolve({
+          content: response?.content || null,
+          streamingActive: Boolean(response?.streamingActive),
+          captureState: response?.captureState || 'complete'
+        });
       }
     );
   });
@@ -918,12 +922,13 @@ async function handleInterject() {
   const latestResponses = new Map();
   for (const ai of participants) {
     const response = await getLatestResponse(ai);
-    if (!response) {
+    const normalizedResponse = response?.content?.trim() || '';
+    if (!normalizedResponse) {
       log(`[插话] 无法获取 ${capitalize(ai)} 的回复`, 'error');
       btn.disabled = false;
       return;
     }
-    latestResponses.set(ai, response);
+    latestResponses.set(ai, normalizedResponse);
   }
 
   log(`[插话] 已获取各方回复，正在发送...`);
@@ -1116,41 +1121,37 @@ function clearDiscussionPolling() {
   clearResponsePolling(discussionPollingController);
 }
 
-function shouldAcceptPolledDiscussionResponse(ai, normalizedResponse) {
+function shouldAcceptPolledDiscussionResponse(ai, normalizedResponse, _controller, responseMeta = {}) {
   const baseline = discussionResponseBaselines.get(ai) || '';
   if (!normalizedResponse || normalizedResponse === baseline) {
     return false;
   }
 
-  if (discussionState.roundType !== 'summary') {
-    return true;
-  }
-
   const pollingState = discussionPollingState.get(ai) || { lastObserved: baseline, stableCount: 0 };
 
-  if (normalizedResponse.length > pollingState.lastObserved.length) {
+  if (normalizedResponse !== pollingState.lastObserved) {
     pollingState.lastObserved = normalizedResponse;
     pollingState.stableCount = 0;
     discussionPollingState.set(ai, pollingState);
     return false;
   }
 
-  if (normalizedResponse === pollingState.lastObserved) {
-    pollingState.stableCount += 1;
+  if (responseMeta.streamingActive || responseMeta.captureState === 'unknown') {
+    pollingState.stableCount = 0;
     discussionPollingState.set(ai, pollingState);
-    return pollingState.stableCount >= 2;
+    return false;
   }
 
-  pollingState.lastObserved = normalizedResponse;
-  pollingState.stableCount = 0;
+  pollingState.stableCount += 1;
   discussionPollingState.set(ai, pollingState);
-  return false;
+  return pollingState.stableCount >= 2;
 }
 
 function startDiscussionResponsePolling() {
   startResponsePolling(discussionPollingController, {
     shouldStop: () => !discussionState.active || discussionState.pendingResponses.size === 0,
-    shouldAccept: (ai, normalizedResponse) => shouldAcceptPolledDiscussionResponse(ai, normalizedResponse),
+    shouldAccept: (ai, normalizedResponse, controller, responseMeta) =>
+      shouldAcceptPolledDiscussionResponse(ai, normalizedResponse, controller, responseMeta),
     onAccept: (ai, normalizedResponse) => {
       discussionPollingController.baselines.set(ai, normalizedResponse);
       syncPollingControllerAliases();
