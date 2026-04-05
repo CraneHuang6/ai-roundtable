@@ -163,8 +163,8 @@
     if (isCapturing) return;
 
     const isResponse =
-      node.matches?.('[data-testid="doubao-assistant-message"], .assistant-message, [data-role="assistant"]') ||
-      node.querySelector?.('[data-testid="doubao-assistant-message"], .assistant-message, [data-role="assistant"]');
+      node.matches?.('[data-testid="doubao-assistant-message"], .assistant-message, [data-role="assistant"], [data-testid="receive_message"]') ||
+      node.querySelector?.('[data-testid="doubao-assistant-message"], .assistant-message, [data-role="assistant"], [data-testid="receive_message"]');
 
     if (isResponse) {
       waitForStreamingComplete();
@@ -182,14 +182,16 @@
     const selectors = [
       '[data-testid="doubao-assistant-message"]',
       '.assistant-message',
-      '[data-role="assistant"]'
+      '[data-role="assistant"]',
+      '[data-testid="receive_message"]'
     ];
 
     for (const selector of selectors) {
       const messages = document.querySelectorAll(selector);
       if (messages.length > 0) {
         const lastMessage = messages[messages.length - 1];
-        const content = (lastMessage.innerText || lastMessage.textContent || '').trim();
+        const contentNode = lastMessage.querySelector?.('[data-testid="message_text_content"]') || lastMessage;
+        const content = (contentNode.innerText || contentNode.textContent || '').trim();
         if (content) {
           return content;
         }

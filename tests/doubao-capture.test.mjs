@@ -124,6 +124,31 @@ function loadDoubaoContent(state, options = {}) {
           }
         }];
       }
+
+      if (selector === '[data-testid="receive_message"]') {
+        return (state.realAssistantMessages || []).map((content) => ({
+          get innerText() {
+            return content;
+          },
+          get textContent() {
+            return content;
+          },
+          querySelector(innerSelector) {
+            if (innerSelector === '[data-testid="message_text_content"]') {
+              return {
+                get innerText() {
+                  return content;
+                },
+                get textContent() {
+                  return content;
+                }
+              };
+            }
+            return null;
+          }
+        }));
+      }
+
       return [];
     }
   };
@@ -276,4 +301,20 @@ test('doubao capture waits for the fuller response before emitting RESPONSE_CAPT
   assert.equal(captures.length, 1);
   assert.equal(captures[0].aiType, 'doubao');
   assert.equal(captures[0].content, '第一段观点\n\n第二段完整结论');
+});
+
+test('doubao getLatestResponse reads real receive_message structure', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: '',
+    realAssistantMessages: ['豆包验收 - 普通发送通过', '豆包验收 - 键盘发送通过']
+  };
+
+  const { api } = loadDoubaoContent(state);
+
+  assert.equal(api.getLatestResponse(), '豆包验收 - 键盘发送通过');
 });
