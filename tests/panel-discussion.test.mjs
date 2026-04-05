@@ -992,3 +992,25 @@ test('discussion mode keeps the action area accessible in a stable stacked layou
     'discussion status should use tighter padding for the sidepanel layout'
   );
 });
+
+test('discussion mode enables start for a doubao-inclusive 3-person selection', () => {
+  const panel = loadPanel();
+
+  panel.setSelectedParticipants(['claude', 'chatgpt', 'doubao']);
+  panel.api.validateParticipants();
+
+  assert.equal(panel.getElementById('start-discussion-btn').disabled, false);
+});
+
+test('discussion participant badge uses 豆包 instead of doubao', async () => {
+  const panel = loadPanel();
+
+  panel.setSelectedParticipants(['claude', 'doubao']);
+  panel.getElementById('discussion-topic').value = '豆包参与讨论';
+
+  await panel.api.startDiscussion();
+
+  assert.match(panel.getElementById('participants-badge').textContent, /Claude/);
+  assert.match(panel.getElementById('participants-badge').textContent, /豆包/);
+  assert.doesNotMatch(panel.getElementById('participants-badge').textContent, /doubao/);
+});

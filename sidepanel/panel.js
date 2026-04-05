@@ -1,6 +1,42 @@
 // AI Panel - Side Panel Controller
 
-const AI_TYPES = ['claude', 'chatgpt', 'gemini'];
+const PROVIDERS = [
+  {
+    id: 'claude',
+    label: 'Claude',
+    hosts: ['claude.ai'],
+    mention: '@Claude',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: true }
+  },
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT',
+    hosts: ['chat.openai.com', 'chatgpt.com'],
+    mention: '@ChatGPT',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: true }
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini',
+    hosts: ['gemini.google.com'],
+    mention: '@Gemini',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: true }
+  },
+  {
+    id: 'doubao',
+    label: '豆包',
+    hosts: ['www.doubao.com'],
+    mention: '@Doubao',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
+  }
+];
+
+const AI_TYPES = PROVIDERS.map((provider) => provider.id);
+const PROVIDER_IDS_PATTERN = PROVIDERS.map((provider) => provider.id).join('|');
+
+function getProviderLabel(aiType) {
+  return PROVIDERS.find((provider) => provider.id === aiType)?.label || capitalize(aiType);
+}
 
 // Cross-reference action keywords (inserted into message)
 const CROSS_REF_ACTIONS = {
@@ -23,11 +59,7 @@ const fileList = document.getElementById('file-list');
 let selectedFiles = [];
 
 // Track connected tabs
-const connectedTabs = {
-  claude: null,
-  chatgpt: null,
-  gemini: null
-};
+const connectedTabs = Object.fromEntries(AI_TYPES.map((ai) => [ai, null]));
 
 // Discussion Mode State
 let discussionState = {
@@ -235,9 +267,11 @@ async function checkConnectedTabs() {
 
 function getAITypeFromUrl(url) {
   if (!url) return null;
-  if (url.includes('claude.ai')) return 'claude';
-  if (url.includes('chat.openai.com') || url.includes('chatgpt.com')) return 'chatgpt';
-  if (url.includes('gemini.google.com')) return 'gemini';
+  for (const provider of PROVIDERS) {
+    if (provider.hosts.some((host) => url.includes(host))) {
+      return provider.id;
+    }
+  }
   return null;
 }
 
@@ -286,10 +320,23 @@ async function handleSend() {
   // Send files first if any
   const filesToSend = [...selectedFiles];
   if (filesToSend.length > 0) {
-    log(`正在上传 ${filesToSend.length} 个文件...`);
-    for (const target of targets) {
-      await sendFilesToAI(target, filesToSend);
+    const fileCapableTargets = targets.filter((target) => {
+      const provider = PROVIDERS.find((item) => item.id === target);
+      return provider?.supports.fileUpload;
+    });
+    const skippedTargets = targets.filter((target) => !fileCapableTargets.includes(target));
+
+    skippedTargets.forEach((target) => {
+      log(`${getProviderLabel(target)}: 暂不支持自动文件上传`, 'error');
+    });
+
+    if (fileCapableTargets.length > 0) {
+      log(`正在上传 ${filesToSend.length} 个文件...`);
+      for (const target of fileCapableTargets) {
+        await sendFilesToAI(target, filesToSend);
+      }
     }
+
     clearFiles();
     // Wait a bit for files to be processed before sending message
     await new Promise(r => setTimeout(r, 500));
@@ -356,7 +403,7 @@ function parseMessage(message) {
     const afterArrow = message.substring(arrowIndex + 2).trim();  // Skip "<-"
 
     // Extract targets (before arrow)
-    const mentionPattern = /@(claude|chatgpt|gemini)/gi;
+    const mentionPattern = new RegExp(`@(${PROVIDER_IDS_PATTERN})`, 'gi');
     const targetMatches = [...beforeArrow.matchAll(mentionPattern)];
     const targetAIs = [...new Set(targetMatches.map(m => m[1].toLowerCase()))];
 
@@ -386,7 +433,7 @@ function parseMessage(message) {
   }
 
   // Pattern-based detection for @ mentions
-  const mentionPattern = /@(claude|chatgpt|gemini)/gi;
+  const mentionPattern = new RegExp(`@(${PROVIDER_IDS_PATTERN})`, 'gi');
   const matches = [...message.matchAll(mentionPattern)];
   const mentions = [...new Set(matches.map(m => m[1].toLowerCase()))];
 
@@ -752,9 +799,9 @@ async function startDiscussion() {
   document.getElementById('discussion-active').classList.remove('hidden');
   document.getElementById('round-badge').textContent = '第 1 轮';
   document.getElementById('participants-badge').textContent =
-    selected.map(capitalize).join(' · ');
+    selected.map(getProviderLabel).join(' · ');
   document.getElementById('topic-display').innerHTML = renderLongTextHTML(topic);
-  updateDiscussionStatus('waiting', `等待 ${selected.map(capitalize).join('、')} 的初始回复...`);
+  updateDiscussionStatus('waiting', `等待 ${selected.map(getProviderLabel).join('、')} 的初始回复...`);
 
   // Disable buttons during round
   document.getElementById('next-round-btn').disabled = true;
@@ -1162,6 +1209,7 @@ function startDiscussionResponsePolling() {
 
 function capitalize(str) {
   if (str === 'chatgpt') return 'ChatGPT';
+  if (str === 'doubao') return '豆包';
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 

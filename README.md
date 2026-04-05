@@ -5,7 +5,7 @@
 
 > 让多个 AI 助手围桌讨论，交叉评价，深度协作
 
-一个 Chrome 扩展，让你像"会议主持人"一样，同时操控多个 AI（Claude、ChatGPT、Gemini），实现真正的 AI 圆桌会议。
+一个 Chrome 扩展，让你像"会议主持人"一样，同时操控多个 AI（Claude、ChatGPT、Gemini、豆包），实现真正的 AI 圆桌会议。
 
 <!-- TODO: 添加 GIF 演示 -->
 <!-- ![Demo GIF](assets/demo.gif) -->
@@ -62,7 +62,7 @@ The focus is validating the **roundtable workflow**, not building software for i
 
 **EN**
 
-This project intentionally operates on the **web UIs** (Claude / ChatGPT / Gemini) instead of APIs.
+This project intentionally operates on the **web UIs** (Claude / ChatGPT / Gemini / Doubao) instead of APIs.
 
 In practice, **API and web chat often behave differently** — commonly due to model variants, hidden system settings, sampling parameters, or UI-specific features.
 
@@ -70,7 +70,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 
 **中文**
 
-这个项目刻意选择直接操作 **Claude / ChatGPT / Gemini 的网页端**，而不是使用 API。
+这个项目刻意选择直接操作 **Claude / ChatGPT / Gemini / 豆包 的网页端**，而不是使用 API。
 
 在实际使用中，**API 和 Web 端的表现往往并不一致**，常见原因包括：模型版本差异、隐藏的系统设置、采样参数，以及网页端特有的交互能力。
 
@@ -133,6 +133,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
    - [Claude](https://claude.ai)
    - [ChatGPT](https://chatgpt.com)
    - [Gemini](https://gemini.google.com)
+   - [豆包](https://www.doubao.com/chat/)
 
 2. 推荐使用 Chrome 的 Split Tab 功能，将 2 个 AI 页面并排显示
 
@@ -145,7 +146,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 ### 普通模式
 
 **基本发送**
-1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini）
+1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包）
 2. 输入消息
 3. 按 Enter 或点击「发送」按钮
 
@@ -218,7 +219,8 @@ ai-roundtable/
 ├── content/
 │   ├── claude.js          # Claude 页面注入脚本
 │   ├── chatgpt.js         # ChatGPT 页面注入脚本
-│   └── gemini.js          # Gemini 页面注入脚本
+│   ├── gemini.js          # Gemini 页面注入脚本
+│   └── doubao.js          # 豆包页面注入脚本
 └── icons/                  # 扩展图标
 ```
 
@@ -257,7 +259,7 @@ ai-roundtable/
 
 - 依赖各 AI 平台的 DOM 结构，平台更新可能导致功能失效
 - 不支持 Claude Artifacts、ChatGPT Canvas 等特殊功能
-- **Gemini 不支持自动文件上传** - 由于 Google 的安全限制，Gemini 需要手动上传文件（Claude 和 ChatGPT 正常支持）
+- **Gemini 与豆包不支持自动文件上传** - Gemini 因 Google 的安全限制需要手动上传；豆包本轮接入仅支持文本发送与回复捕获
 
 ---
 
