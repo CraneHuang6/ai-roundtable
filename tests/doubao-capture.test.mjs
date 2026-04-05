@@ -40,14 +40,16 @@ function createElement() {
   };
 }
 
-function loadDoubaoContent(state) {
+function loadDoubaoContent(state, options = {}) {
   const messages = [];
   const inputEvents = [];
+  const inputTagName = options.inputTagName || 'DIV';
 
   const inputEl = {
-    tagName: 'DIV',
+    tagName: inputTagName,
     innerHTML: '',
     textContent: '',
+    value: '',
     focused: false,
     focus() {
       this.focused = true;
@@ -68,6 +70,7 @@ function loadDoubaoContent(state) {
     },
     getAttribute(name) {
       if (name === 'aria-label') return '发送';
+      if (name === 'data-testid') return 'chat_input_send_button';
       return null;
     }
   };
@@ -82,6 +85,8 @@ function loadDoubaoContent(state) {
     querySelector(selector) {
       if (selector === 'main' || selector === 'main, .semi-navigation, .semi-layout') return createElement();
       if (
+        selector === '[data-testid="chat_input_input"]' ||
+        selector === 'textarea[placeholder*="发消息"]' ||
         selector === 'div[contenteditable="true"]' ||
         selector === '[role="textbox"][contenteditable="true"]' ||
         selector === 'textarea'
@@ -89,6 +94,7 @@ function loadDoubaoContent(state) {
         return inputEl;
       }
       if (
+        selector === '[data-testid="chat_input_send_button"]' ||
         selector === 'button[aria-label*="发送"]' ||
         selector === 'button[aria-label*="Send"]' ||
         selector === 'button[type="submit"]'
@@ -141,11 +147,18 @@ function loadDoubaoContent(state) {
     disconnect() {}
   }
 
+  class HTMLTextAreaElement {
+    set value(next) {
+      inputEl.value = next;
+    }
+  }
+
   const context = vm.createContext({
     console,
     document,
     chrome,
     MutationObserver,
+    HTMLTextAreaElement,
     Event: class Event {
       constructor(type, options = {}) {
         this.type = type;
@@ -189,7 +202,7 @@ function loadDoubaoContent(state) {
   });
   context.globalThis = context;
 
-  const source = fs.readFileSync('D:/Coding/ai-roundtable/.worktrees/doubao-support/content/doubao.js', 'utf8').replace(
+  const source = fs.readFileSync('D:/Coding/ai-roundtable/content/doubao.js', 'utf8').replace(
     /\s*console\.log\('\[AI Panel\] Doubao content script loaded'\);\r?\n\}\)\(\);\s*$/,
     "\n  globalThis.__doubaoTest = { injectMessage, waitForStreamingComplete, getLatestResponse };\n  console.log('[AI Panel] Doubao content script loaded');\n})();\n"
   );
@@ -205,7 +218,7 @@ function loadDoubaoContent(state) {
   };
 }
 
-test('doubao injectMessage fills the input and clicks send', async () => {
+test('doubao injectMessage fills the contenteditable input and clicks send', async () => {
   const state = {
     now: 0,
     tick: 0,
@@ -221,6 +234,26 @@ test('doubao injectMessage fills the input and clicks send', async () => {
 
   assert.equal(inputEl.focused, true);
   assert.match(inputEl.innerHTML, /请用中文总结这个问题/);
+  assert.equal(sendButton.clicked, true);
+});
+
+test('doubao injectMessage drives textarea input state before clicking send', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api, inputEl, sendButton, inputEvents } = loadDoubaoContent(state, { inputTagName: 'TEXTAREA' });
+
+  await api.injectMessage('请用中文总结这个问题');
+
+  assert.equal(inputEl.focused, true);
+  assert.equal(inputEl.value, '请用中文总结这个问题');
+  assert.deepEqual(inputEvents.slice(0, 4), ['input', 'change', 'keydown', 'keyup']);
   assert.equal(sendButton.clicked, true);
 });
 

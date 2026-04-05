@@ -46,6 +46,8 @@
 
   function findInput() {
     const selectors = [
+      '[data-testid="chat_input_input"]',
+      'textarea[placeholder*="发消息"]',
       '[role="textbox"][contenteditable="true"]',
       'div[contenteditable="true"]',
       'textarea'
@@ -62,6 +64,7 @@
 
   function findSendButton() {
     const selectors = [
+      '[data-testid="chat_input_send_button"]',
       'button[aria-label*="发送"]',
       'button[aria-label*="Send"]',
       'button[type="submit"]'
@@ -69,7 +72,7 @@
 
     for (const selector of selectors) {
       const el = document.querySelector(selector);
-      if (el && isVisible(el)) {
+      if (el && isVisible(el) && !el.disabled) {
         return el.closest('button') || el;
       }
     }
@@ -85,9 +88,21 @@
     inputEl.focus();
 
     if (inputEl.tagName === 'TEXTAREA') {
-      inputEl.value = text;
+      const nativeValueSetter =
+        typeof HTMLTextAreaElement !== 'undefined'
+          ? Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+          : null;
+
+      if (nativeValueSetter) {
+        nativeValueSetter.call(inputEl, text);
+      } else {
+        inputEl.value = text;
+      }
+
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
       inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      inputEl.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+      inputEl.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
     } else {
       inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
