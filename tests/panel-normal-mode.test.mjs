@@ -252,7 +252,8 @@ function loadPanel(responseMap = {}) {
     handleSend,
     handleCrossReference,
     handleMutualReview,
-    log
+    log,
+    parseMessage
   };
   `;
 
@@ -377,4 +378,44 @@ test('panel polling logic uses shared helper for normal and discussion flows', (
   assert.match(source, /captureResponseBaselines\(normalPollingController, targets/, 'expected normal mode to use the shared baseline helper');
   assert.match(source, /captureResponseBaselines\(discussionPollingController, selected/, 'expected discussion start to use the shared baseline helper');
   assert.match(source, /captureResponseBaselines\(discussionPollingController, participants/, 'expected discussion follow-up stages to use the shared baseline helper');
+});
+
+test('parseMessage accepts Doubao mentions in direct cross-reference syntax', () => {
+  const panel = loadPanel();
+
+  const parsed = panel.api.parseMessage('@Doubao 评价一下 @Claude');
+
+  assert.equal(parsed.crossRef, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.targetAIs)), ['doubao']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sourceAIs)), ['claude']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.mentions)), ['doubao', 'claude']);
+});
+
+test('parseMessage accepts Doubao in explicit /cross routing', () => {
+  const panel = loadPanel();
+
+  const parsed = panel.api.parseMessage('/cross @Claude @Doubao <- @ChatGPT 对比一下');
+
+  assert.equal(parsed.crossRef, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.targetAIs)), ['claude', 'doubao']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sourceAIs)), ['chatgpt']);
+  assert.equal(parsed.originalMessage, '对比一下');
+});
+
+test('normal send includes doubao when its checkbox is selected', async () => {
+  const panel = loadPanel();
+
+  panel.getElementById('message-input').value = '请给出你的判断';
+  panel.getElementById('target-doubao').checked = true;
+  panel.getElementById('target-claude').checked = false;
+  panel.getElementById('target-chatgpt').checked = false;
+  panel.getElementById('target-gemini').checked = false;
+
+  await panel.api.handleSend();
+
+  const sendMessages = panel.getSentMessages();
+
+  assert.equal(sendMessages.length, 1);
+  assert.equal(sendMessages[0].aiType, 'doubao');
+  assert.equal(sendMessages[0].message, '请给出你的判断');
 });
