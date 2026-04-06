@@ -200,17 +200,17 @@ test('chatgpt capture does not wait for the long fallback after streaming stops 
   assert.ok(state.now < 12000, `expected capture before long fallback, got ${state.now}ms`);
 });
 
-test('chatgpt getCaptureState returns complete when latest assistant turn has non-empty text without action buttons', () => {
+test('chatgpt getCaptureState returns unknown when latest assistant turn has text but no completion signals', () => {
   const state = {
     now: 0,
     tick: 0,
     isStreaming: false,
-    currentContent: '这是一条完整回复'
+    currentContent: '这是一条仍可能继续增长的回复'
   };
 
   const { api } = loadChatgptContent(state);
 
-  assert.equal(api.getCaptureState(), 'complete');
+  assert.equal(api.getCaptureState(), 'unknown');
 });
 
 test('chatgpt injectMessage clears lastCapturedContent before a new round starts', async () => {

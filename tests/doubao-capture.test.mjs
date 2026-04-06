@@ -240,7 +240,7 @@ function loadDoubaoContent(state, options = {}) {
 
   const source = fs.readFileSync('D:/Coding/ai-roundtable/content/doubao.js', 'utf8').replace(
     /\s*console\.log\('\[AI Panel\] Doubao content script loaded'\);\r?\n\}\)\(\);\s*$/,
-    "\n  globalThis.__doubaoTest = { injectMessage, waitForStreamingComplete, getLatestResponse, getLastCapturedContent: () => lastCapturedContent, setLastCapturedContent: (value) => { lastCapturedContent = value; } };\n  console.log('[AI Panel] Doubao content script loaded');\n})();\n"
+    "\n  globalThis.__doubaoTest = { injectMessage, waitForStreamingComplete, getLatestResponse, isStreamingActive, getLastCapturedContent: () => lastCapturedContent, setLastCapturedContent: (value) => { lastCapturedContent = value; } };\n  console.log('[AI Panel] Doubao content script loaded');\n})();\n"
   );
 
   vm.runInContext(source, context);
@@ -349,6 +349,22 @@ test('doubao getLatestResponse falls back to wrapper text when message_text_cont
   const { api } = loadDoubaoContent(state);
 
   assert.equal(api.getLatestResponse(), '豆包验收 - 后台标签页文本回退通过');
+});
+
+test('doubao reports streaming metadata for polling-based completion checks', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: true,
+    currentContent: '豆包仍在输出第一段',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadDoubaoContent(state);
+
+  assert.equal(typeof api.isStreamingActive, 'function');
+  assert.equal(api.isStreamingActive(), true);
 });
 
 test('doubao getLatestResponse skips trailing empty receive_message placeholder', () => {

@@ -83,7 +83,7 @@ async function getResponseFromContentScript(aiType) {
     return {
       content: response?.content || null,
       streamingActive: Boolean(response?.streamingActive),
-      captureState: response?.captureState || 'complete'
+      captureState: response?.captureState || 'unknown'
     };
   } catch (err) {
     // Fallback to stored response on error

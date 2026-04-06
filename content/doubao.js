@@ -37,7 +37,13 @@
     }
 
     if (message.type === 'GET_LATEST_RESPONSE') {
-      sendResponse({ content: getLatestResponse() });
+      const content = getLatestResponse();
+      const streamingActive = isStreamingActive();
+      sendResponse({
+        content,
+        streamingActive,
+        captureState: streamingActive ? 'streaming' : 'unknown'
+      });
       return true;
     }
   });

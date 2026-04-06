@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-function loadBackground(sessionState = {}) {
+function loadBackground(sessionState = {}, options = {}) {
   const listeners = {
     onClicked: null,
     onUpdated: null,
@@ -53,10 +53,10 @@ function loadBackground(sessionState = {}) {
         }
       },
       async query() {
-        return [];
+        return options.tabs ?? [];
       },
       async sendMessage() {
-        return { success: true };
+        return options.realtimeResponse ?? { success: true };
       }
     }
   };
@@ -81,12 +81,20 @@ function loadBackground(sessionState = {}) {
   const source = fs.readFileSync(new URL('../background.js', import.meta.url), 'utf8') + `
   globalThis.__backgroundTest = {
     getAITypeFromUrl,
-    getStoredResponses
+    getStoredResponses,
+    getResponseFromContentScript
   };
   `;
 
   vm.runInContext(source, context);
   return context.__backgroundTest;
+}
+
+function loadBackgroundWithRealtimeResponse(realtimeResponse) {
+  return loadBackground({}, {
+    tabs: [{ id: 1, url: 'https://www.doubao.com/chat/123' }],
+    realtimeResponse
+  });
 }
 
 test('background test harness reads active repo background.js', () => {
@@ -112,4 +120,16 @@ test('background stored response defaults include doubao slot', async () => {
     gemini: null,
     doubao: null
   });
+});
+
+test('background treats missing provider completion metadata as unknown instead of complete', async () => {
+  const api = loadBackground();
+  globalThis.chrome = undefined;
+
+  const sourceApi = loadBackgroundWithRealtimeResponse({ content: '豆包第一段', streamingActive: undefined, captureState: undefined });
+  const response = await sourceApi.getResponseFromContentScript('doubao');
+
+  assert.equal(response.content, '豆包第一段');
+  assert.equal(response.streamingActive, false);
+  assert.equal(response.captureState, 'unknown');
 });

@@ -600,6 +600,140 @@ test('discussion mode does not complete a round when ChatGPT completion readines
   );
 });
 
+test('discussion mode keeps round 2 pending when ChatGPT and 豆包 are both still streaming', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '第2轮双流式不应提前收口',
+    participants: ['chatgpt', 'doubao'],
+    currentRound: 1,
+    history: [
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第1轮完整回复' },
+      { round: 1, ai: 'doubao', type: 'initial', content: '豆包第1轮完整回复' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'initial'
+  });
+
+  panel.setLatestResponses({
+    chatgpt: { content: 'ChatGPT 第1轮完整回复', streamingActive: false, captureState: 'complete' },
+    doubao: { content: '豆包第1轮完整回复', streamingActive: false, captureState: 'complete' }
+  });
+
+  await panel.api.nextRound();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: 'ChatGPT 第2轮回复第一段', streamingActive: true, captureState: 'streaming' },
+      doubao: { content: '豆包第2轮回复第一段', streamingActive: true, captureState: 'streaming' }
+    });
+  }, 200);
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  let state = panel.api.getDiscussionState();
+  assert.equal(state.currentRound, 2);
+  assert.deepEqual(Array.from(state.pendingResponses).sort(), ['chatgpt', 'doubao']);
+  assert.equal(state.history.filter((entry) => entry.round === 2).length, 0);
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+  assert.doesNotMatch(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 第2轮完整终稿'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['doubao']);
+  assert.equal(state.history.filter((entry) => entry.round === 2 && entry.ai === 'chatgpt').length, 1);
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'doubao',
+    content: '豆包第2轮完整终稿'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(state.history.filter((entry) => entry.round === 2 && entry.ai === 'doubao').length, 1);
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
+  assert.match(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
+});
+
+test('discussion mode waits for ChatGPT unknown and 豆包 streaming states before accepting fuller push updates', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '混合完成态不能提前收口',
+    participants: ['chatgpt', 'doubao'],
+    currentRound: 1,
+    history: [
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第1轮完整回复' },
+      { round: 1, ai: 'doubao', type: 'initial', content: '豆包第1轮完整回复' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'initial'
+  });
+
+  panel.setLatestResponses({
+    chatgpt: { content: 'ChatGPT 第1轮完整回复', streamingActive: false, captureState: 'complete' },
+    doubao: { content: '豆包第1轮完整回复', streamingActive: false, captureState: 'complete' }
+  });
+
+  await panel.api.nextRound();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: 'ChatGPT 第2轮回复第一段（unknown）', streamingActive: false, captureState: 'unknown' },
+      doubao: { content: '豆包第2轮回复第一段（streaming）', streamingActive: true, captureState: 'streaming' }
+    });
+  }, 200);
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  let state = panel.api.getDiscussionState();
+  assert.equal(state.currentRound, 2);
+  assert.deepEqual(Array.from(state.pendingResponses).sort(), ['chatgpt', 'doubao']);
+  assert.equal(state.history.filter((entry) => entry.round === 2).length, 0);
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+  assert.doesNotMatch(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 第2轮完整终稿（fuller push update）'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['doubao']);
+  assert.equal(
+    state.history.find((entry) => entry.round === 2 && entry.ai === 'chatgpt')?.content,
+    'ChatGPT 第2轮完整终稿（fuller push update）'
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'doubao',
+    content: '豆包第2轮完整终稿（fuller push update）'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 2 && entry.ai === 'doubao')?.content,
+    '豆包第2轮完整终稿（fuller push update）'
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
+  assert.match(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
+});
+
 test('discussion summary waits for fuller pushed responses before finalizing the summary view', async () => {
   const panel = loadPanel();
   const listener = panel.getOnMessageListener();

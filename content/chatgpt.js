@@ -236,7 +236,7 @@
       }
 
       if (content) {
-        return 'complete';
+        return 'unknown';
       }
     }
 
