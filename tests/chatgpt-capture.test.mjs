@@ -33,6 +33,14 @@ function createElement() {
 
 function loadChatgptContent(state) {
   const messages = [];
+  const inputEl = {
+    ...createElement(),
+    tagName: 'TEXTAREA'
+  };
+  const sendButton = {
+    ...createElement(),
+    click() {}
+  };
   const assistantContainer = {
     querySelectorAll() {
       return [];
@@ -48,6 +56,25 @@ function loadChatgptContent(state) {
     addEventListener() {},
     querySelector(selector) {
       if (selector === 'main') return createElement();
+      if (
+        selector === '#prompt-textarea' ||
+        selector === 'div[contenteditable="true"]#prompt-textarea' ||
+        selector === 'div[contenteditable="true"][data-placeholder]' ||
+        selector === 'textarea[data-id="root"]' ||
+        selector === 'textarea[placeholder*="Message"]' ||
+        selector === 'div[contenteditable="true"][role="textbox"]' ||
+        selector === 'textarea'
+      ) {
+        return inputEl;
+      }
+      if (
+        selector === 'button[data-testid="send-button"]' ||
+        selector === 'button[aria-label="Send prompt"]' ||
+        selector === 'button[aria-label="Send message"]' ||
+        selector === 'form button[type="submit"]'
+      ) {
+        return sendButton;
+      }
 
       if (
         selector === 'button[aria-label*="Stop"]' ||
@@ -105,7 +132,9 @@ function loadChatgptContent(state) {
     setTimeout(fn, ms = 0) {
       state.now += ms;
       state.tick += 1;
-      if (state.tick === 8) {
+      if (typeof state.onTick === 'function') {
+        state.onTick(state.tick);
+      } else if (state.tick === 8) {
         state.isStreaming = false;
         state.currentContent = '开头框架。\n\n完整结论与展开内容。';
       }
@@ -123,7 +152,7 @@ function loadChatgptContent(state) {
 
   const source = fs.readFileSync('D:/Coding/ai-roundtable/content/chatgpt.js', 'utf8').replace(
     /\s*console\.log\('\[AI Panel\] ChatGPT content script loaded'\);\r?\n\}\)\(\);\s*$/,
-    "\n  globalThis.__chatgptTest = { waitForStreamingComplete };\n  console.log('[AI Panel] ChatGPT content script loaded');\n})();\n"
+    "\n  globalThis.__chatgptTest = { injectMessage, waitForStreamingComplete, getCaptureState, getLastCapturedContent: () => lastCapturedContent, setLastCapturedContent: (value) => { lastCapturedContent = value; } };\n  console.log('[AI Panel] ChatGPT content script loaded');\n})();\n"
   );
 
   vm.runInContext(source, context);
@@ -169,4 +198,33 @@ test('chatgpt capture does not wait for the long fallback after streaming stops 
   assert.equal(captures.length, 1);
   assert.equal(captures[0].content, '开头框架。\n\n完整结论与展开内容。');
   assert.ok(state.now < 12000, `expected capture before long fallback, got ${state.now}ms`);
+});
+
+test('chatgpt getCaptureState returns complete when latest assistant turn has non-empty text without action buttons', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '这是一条完整回复'
+  };
+
+  const { api } = loadChatgptContent(state);
+
+  assert.equal(api.getCaptureState(), 'complete');
+});
+
+test('chatgpt injectMessage clears lastCapturedContent before a new round starts', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '完全相同的回复'
+  };
+
+  const { api } = loadChatgptContent(state);
+  api.setLastCapturedContent('完全相同的回复');
+
+  await api.injectMessage('请开始新一轮讨论');
+
+  assert.equal(api.getLastCapturedContent(), '');
 });

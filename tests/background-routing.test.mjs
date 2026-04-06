@@ -78,7 +78,7 @@ function loadBackground(sessionState = {}) {
   });
   context.globalThis = context;
 
-  const source = fs.readFileSync('D:/Coding/ai-roundtable/.worktrees/doubao-support/background.js', 'utf8') + `
+  const source = fs.readFileSync(new URL('../background.js', import.meta.url), 'utf8') + `
   globalThis.__backgroundTest = {
     getAITypeFromUrl,
     getStoredResponses
@@ -88,6 +88,12 @@ function loadBackground(sessionState = {}) {
   vm.runInContext(source, context);
   return context.__backgroundTest;
 }
+
+test('background test harness reads active repo background.js', () => {
+  const source = fs.readFileSync(new URL(import.meta.url), 'utf8');
+
+  assert.match(source, /fs\.readFileSync\(new URL\('\.\.\/background\.js', import\.meta\.url\), 'utf8'\)/);
+});
 
 test('background maps Doubao host to doubao provider id', () => {
   const api = loadBackground();

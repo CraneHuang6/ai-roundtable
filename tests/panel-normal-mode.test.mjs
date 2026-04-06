@@ -4,16 +4,77 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const PANEL_JS = new URL('../sidepanel/panel.js', import.meta.url);
+const loadedPanels = new Set();
+
+test.afterEach(() => {
+  for (const panel of loadedPanels) {
+    panel.dispose?.();
+  }
+  loadedPanels.clear();
+});
 
 function extractLongTextId(html) {
   return html.match(/data-long-text-id="([^"]+)"/)?.[1] ?? null;
 }
 
-function loadPanel(responseMap = {}) {
+function loadPanel(responseMap = {}, options = {}) {
   const elementCache = new Map();
   const longTextNodes = new Map();
   const domReadyCallbacks = [];
   const sentMessages = [];
+  const activeIntervals = new Set();
+  const activeTimeouts = new Set();
+  let nextTimerId = 1;
+
+  function createTrackedTimer(type, callback, ms = 0) {
+    const handle = { id: nextTimerId++, type, callback, ms };
+    if (type === 'interval') {
+      activeIntervals.add(handle);
+    } else {
+      activeTimeouts.add(handle);
+    }
+    return handle;
+  }
+
+  function trackedSetInterval(callback, ms = 0) {
+    if (options.auditTimers) {
+      return createTrackedTimer('interval', callback, ms);
+    }
+
+    const handle = setInterval(callback, ms);
+    activeIntervals.add(handle);
+    return handle;
+  }
+
+  function trackedClearInterval(handle) {
+    if (!handle) return;
+    activeIntervals.delete(handle);
+    if (!options.auditTimers) {
+      clearInterval(handle);
+    }
+  }
+
+  function trackedSetTimeout(callback, ms = 0) {
+    if (options.auditTimers) {
+      return createTrackedTimer('timeout', callback, ms);
+    }
+
+    let handle = null;
+    handle = setTimeout(() => {
+      activeTimeouts.delete(handle);
+      callback();
+    }, ms);
+    activeTimeouts.add(handle);
+    return handle;
+  }
+
+  function trackedClearTimeout(handle) {
+    if (!handle) return;
+    activeTimeouts.delete(handle);
+    if (!options.auditTimers) {
+      clearTimeout(handle);
+    }
+  }
 
   function syncChildren(element) {
     element.firstChild = element.children[0] ?? null;
@@ -229,10 +290,10 @@ function loadPanel(responseMap = {}) {
     document,
     chrome,
     confirm: () => true,
-    setInterval,
-    clearInterval,
-    setTimeout,
-    clearTimeout,
+    setInterval: trackedSetInterval,
+    clearInterval: trackedClearInterval,
+    setTimeout: trackedSetTimeout,
+    clearTimeout: trackedClearTimeout,
     Date,
     Promise,
     Map,
@@ -260,14 +321,44 @@ function loadPanel(responseMap = {}) {
   vm.runInContext(source, context);
   domReadyCallbacks.forEach((callback) => callback());
 
-  return {
+  const panel = {
     api: context.__panelTest,
     getElementById: (id) => document.getElementById(id),
     querySelector: (selector) => document.querySelector(selector),
     getRuntimeMessages: () => sentMessages,
-    getSentMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE')
+    getSentMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE'),
+    getActiveIntervalCount: () => activeIntervals.size,
+    getActiveTimeoutCount: () => activeTimeouts.size,
+    dispose() {
+      for (const handle of Array.from(activeIntervals)) {
+        trackedClearInterval(handle);
+      }
+      for (const handle of Array.from(activeTimeouts)) {
+        trackedClearTimeout(handle);
+      }
+    }
   };
+
+  loadedPanels.add(panel);
+  return panel;
 }
+
+test('panel test harness can dispose active normal-mode timers after each test', async () => {
+  const panel = loadPanel({ claude: ['Claude 的旧回复', 'Claude 的最新回复'] }, { auditTimers: true });
+
+  panel.getElementById('message-input').value = '请继续';
+  panel.getElementById('target-claude').checked = true;
+
+  await panel.api.handleSend();
+
+  assert.ok(panel.getActiveIntervalCount() > 0);
+  assert.equal(typeof panel.dispose, 'function');
+
+  panel.dispose();
+
+  assert.equal(panel.getActiveIntervalCount(), 0);
+  assert.equal(panel.getActiveTimeoutCount(), 0);
+});
 
 test('/mutual always appends Chinese reply protocol to evaluation prompt', async () => {
   const panel = loadPanel({

@@ -109,7 +109,8 @@ Provider-specific notes:
 - Gemini background-tab response extraction - `content/gemini.js` 抓取最新回复时优先 `innerText`，但必须回退到 `textContent`；后台标签页里 `innerText` 可能为空或卡住，导致 summary 一直等到切回标签页才完成。
 - Sidepanel response closure ownership - 对 normal send、discussion 这类需要“等待新回复”的 sidepanel 流程，发送前先抓每个 AI 的 baseline，再用 pending 集合 + pull polling 收口；不要把发送前缓存的旧回复当成新结果，也不要把收口完全压在 provider push 上。
 - Shared polling helper - 当 normal mode 与 discussion mode 都依赖 baseline-driven polling 时，优先扩展 `createPollingController()` / `captureResponseBaselines()` / `startResponsePolling()` 这类共享 helper，不要再复制第二套 timer/baseline 状态机。
-- Discussion VM test harness cleanup - 对 `tests/panel-discussion.test.mjs` 这类通过 `vm.runInContext` 加载 sidepanel 的测试桩，若生产代码会创建 `setInterval`/`setTimeout`，测试桩必须跟踪并在 `afterEach`/`dispose()` 中清理，否则断言已完成也会因活跃 timer 导致 `node --test` 不退出。
+- Sidepanel VM test harness cleanup - 对 `tests/panel-discussion.test.mjs`、`tests/panel-normal-mode.test.mjs` 这类通过 `vm.runInContext` 加载 sidepanel 的测试桩，若生产代码会创建 `setInterval`/`setTimeout`，测试桩必须包装 timer、暴露 `dispose()`，并在 `afterEach` 或测试结束路径统一清理，否则断言已通过也会因活跃 timer 导致 `node --test` 不退出。
+- Background harness source path - `tests/background-routing.test.mjs` 这类直接读取源码文件的 harness，必须使用 `new URL('../background.js', import.meta.url)` 这类相对当前测试文件的路径；不要硬编码 `.worktrees/...` 或绝对路径，否则分支收口或切换工作树后会把 stale 文件当成当前生产代码。
 
 ### If `/mutual` or `@...` / `/cross` logic is wrong
 

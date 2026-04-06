@@ -190,3 +190,95 @@ test('chatgpt response extraction keeps middle content in chained A to B to C ov
     '第一步：准备环境\n\n第二步：执行命令\n\n第三步：检查输出\n\n第四步：完成收尾'
   );
 });
+
+test('chatgpt response extraction skips trailing empty assistant container and returns last non-empty reply', () => {
+  const emptyAssistantContainer = {
+    querySelectorAll() {
+      return [];
+    },
+    get innerText() {
+      return '';
+    },
+    get textContent() {
+      return '';
+    }
+  };
+
+  const document = {
+    readyState: 'complete',
+    body: {},
+    addEventListener() {},
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (
+        selector === '[data-message-author-role="assistant"]' ||
+        selector === '[data-testid*="conversation-turn"]:has([data-message-author-role="assistant"])' ||
+        selector === '.agent-turn'
+      ) {
+        return [
+          {
+            querySelectorAll(innerSelector) {
+              if (innerSelector === '.markdown, [class*="markdown"]') {
+                return [createElement({ text: '上一条有效回复', order: 1 })];
+              }
+              return [];
+            },
+            get innerText() {
+              return '上一条有效回复';
+            },
+            get textContent() {
+              return '上一条有效回复';
+            }
+          },
+          emptyAssistantContainer
+        ];
+      }
+      return [];
+    }
+  };
+
+  const chrome = {
+    runtime: {
+      id: 'test-extension',
+      sendMessage() {},
+      onMessage: {
+        addListener() {}
+      }
+    }
+  };
+
+  class MutationObserver {
+    constructor() {}
+    observe() {}
+    disconnect() {}
+  }
+
+  const context = vm.createContext({
+    console,
+    document,
+    chrome,
+    MutationObserver,
+    Event: class Event {},
+    Node: {
+      DOCUMENT_POSITION_PRECEDING: 2,
+      DOCUMENT_POSITION_FOLLOWING: 4
+    },
+    setTimeout,
+    clearTimeout,
+    Date,
+    Promise,
+    globalThis: null
+  });
+  context.globalThis = context;
+
+  const source = fs.readFileSync('D:/Coding/ai-roundtable/content/chatgpt.js', 'utf8').replace(
+    /\s*console\.log\('\[AI Panel\] ChatGPT content script loaded'\);\r?\n\}\)\(\);\s*$/,
+    "\n  globalThis.__chatgptTest = { getLatestResponse };\n  console.log('[AI Panel] ChatGPT content script loaded');\n})();\n"
+  );
+
+  vm.runInContext(source, context);
+
+  assert.equal(context.__chatgptTest.getLatestResponse(), '上一条有效回复');
+});

@@ -126,27 +126,34 @@ function loadDoubaoContent(state, options = {}) {
       }
 
       if (selector === '[data-testid="receive_message"]') {
-        return (state.realAssistantMessages || []).map((content) => ({
-          get innerText() {
-            return content;
-          },
-          get textContent() {
-            return content;
-          },
-          querySelector(innerSelector) {
-            if (innerSelector === '[data-testid="message_text_content"]') {
-              return {
-                get innerText() {
-                  return content;
-                },
-                get textContent() {
-                  return content;
-                }
-              };
+        return (state.realAssistantMessages || []).map((message) => {
+          const wrapperText = typeof message === 'string' ? message : (message.wrapperText || '');
+          const contentNodeText = typeof message === 'string'
+            ? message
+            : (message.contentNodeText ?? message.wrapperText ?? '');
+
+          return {
+            get innerText() {
+              return wrapperText;
+            },
+            get textContent() {
+              return wrapperText;
+            },
+            querySelector(innerSelector) {
+              if (innerSelector === '[data-testid="message_text_content"]') {
+                return {
+                  get innerText() {
+                    return contentNodeText;
+                  },
+                  get textContent() {
+                    return contentNodeText;
+                  }
+                };
+              }
+              return null;
             }
-            return null;
-          }
-        }));
+          };
+        });
       }
 
       return [];
@@ -208,12 +215,16 @@ function loadDoubaoContent(state, options = {}) {
     setTimeout(fn, ms = 0) {
       state.now += ms;
       state.tick += 1;
-      if (state.tick === 2) {
-        state.currentContent = state.partialContent;
-      }
-      if (state.tick === 6) {
-        state.isStreaming = false;
-        state.currentContent = state.fullContent;
+      if (typeof state.onTick === 'function') {
+        state.onTick(state.tick);
+      } else {
+        if (state.tick === 2) {
+          state.currentContent = state.partialContent;
+        }
+        if (state.tick === 6) {
+          state.isStreaming = false;
+          state.currentContent = state.fullContent;
+        }
       }
       fn();
       return state.tick;
@@ -229,7 +240,7 @@ function loadDoubaoContent(state, options = {}) {
 
   const source = fs.readFileSync('D:/Coding/ai-roundtable/content/doubao.js', 'utf8').replace(
     /\s*console\.log\('\[AI Panel\] Doubao content script loaded'\);\r?\n\}\)\(\);\s*$/,
-    "\n  globalThis.__doubaoTest = { injectMessage, waitForStreamingComplete, getLatestResponse };\n  console.log('[AI Panel] Doubao content script loaded');\n})();\n"
+    "\n  globalThis.__doubaoTest = { injectMessage, waitForStreamingComplete, getLatestResponse, getLastCapturedContent: () => lastCapturedContent, setLastCapturedContent: (value) => { lastCapturedContent = value; } };\n  console.log('[AI Panel] Doubao content script loaded');\n})();\n"
   );
 
   vm.runInContext(source, context);
@@ -317,4 +328,66 @@ test('doubao getLatestResponse reads real receive_message structure', () => {
   const { api } = loadDoubaoContent(state);
 
   assert.equal(api.getLatestResponse(), '豆包验收 - 键盘发送通过');
+});
+
+test('doubao getLatestResponse falls back to wrapper text when message_text_content is empty', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: '',
+    realAssistantMessages: [
+      {
+        wrapperText: '豆包验收 - 后台标签页文本回退通过',
+        contentNodeText: ''
+      }
+    ]
+  };
+
+  const { api } = loadDoubaoContent(state);
+
+  assert.equal(api.getLatestResponse(), '豆包验收 - 后台标签页文本回退通过');
+});
+
+test('doubao getLatestResponse skips trailing empty receive_message placeholder', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: '',
+    realAssistantMessages: [
+      '第一条历史回复',
+      '最新有效回复',
+      {
+        wrapperText: '',
+        contentNodeText: ''
+      }
+    ]
+  };
+
+  const { api } = loadDoubaoContent(state);
+
+  assert.equal(api.getLatestResponse(), '最新有效回复');
+});
+
+test('doubao injectMessage clears lastCapturedContent before a new round starts', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadDoubaoContent(state);
+  api.setLastCapturedContent('完全相同的回复');
+
+  await api.injectMessage('请继续下一轮讨论');
+
+  assert.equal(api.getLastCapturedContent(), '');
 });

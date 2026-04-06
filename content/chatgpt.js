@@ -58,6 +58,8 @@
   setupResponseObserver();
 
   async function injectMessage(text) {
+    lastCapturedContent = '';
+
     // ChatGPT uses a contenteditable div (previously textarea, changed in 2025+)
     const inputSelectors = [
       '#prompt-textarea',
@@ -219,9 +221,10 @@
       return 'streaming';
     }
 
-    const containers = document.querySelectorAll('[data-message-author-role="assistant"]');
-    if (containers.length > 0) {
-      const lastContainer = containers[containers.length - 1];
+    const containers = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+    for (let i = containers.length - 1; i >= 0; i--) {
+      const lastContainer = containers[i];
+      const content = getLatestResponse();
       const buttonGroup = lastContainer.parentElement?.querySelector('[class*="group"]') ||
                          lastContainer.nextElementSibling;
 
@@ -230,6 +233,10 @@
         if (buttons.length >= 3) {
           return 'complete';
         }
+      }
+
+      if (content) {
+        return 'complete';
       }
     }
 
@@ -414,7 +421,20 @@
 
     if (containers.length === 0) return null;
 
-    const lastContainer = containers[containers.length - 1];
+    let lastContainer = null;
+    for (let i = containers.length - 1; i >= 0; i--) {
+      const candidate = containers[i];
+      const candidateText = (candidate.innerText || candidate.textContent || '').trim();
+      const candidateStructuredText = Array.from(candidate.querySelectorAll('.markdown, [class*="markdown"], [class*="canvas"], [class*="text-block"], [class*="code-block"], pre code'))
+        .map(el => (el.innerText || el.textContent || '').trim())
+        .find(Boolean);
+      if (candidateText || candidateStructuredText) {
+        lastContainer = candidate;
+        break;
+      }
+    }
+
+    if (!lastContainer) return null;
 
     const contentParts = [];
 

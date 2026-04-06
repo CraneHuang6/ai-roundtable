@@ -80,6 +80,8 @@
   }
 
   async function injectMessage(text) {
+    lastCapturedContent = '';
+
     const inputEl = findInput();
     if (!inputEl) {
       throw new Error('Could not find input field');
@@ -187,11 +189,17 @@
     ];
 
     for (const selector of selectors) {
-      const messages = document.querySelectorAll(selector);
-      if (messages.length > 0) {
-        const lastMessage = messages[messages.length - 1];
-        const contentNode = lastMessage.querySelector?.('[data-testid="message_text_content"]') || lastMessage;
-        const content = (contentNode.innerText || contentNode.textContent || '').trim();
+      const messages = Array.from(document.querySelectorAll(selector));
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const lastMessage = messages[i];
+        const contentNode = lastMessage.querySelector?.('[data-testid="message_text_content"]');
+        const content = (
+          contentNode?.innerText ||
+          contentNode?.textContent ||
+          lastMessage.innerText ||
+          lastMessage.textContent ||
+          ''
+        ).trim();
         if (content) {
           return content;
         }
