@@ -330,7 +330,8 @@ function loadPanel(responseMap = {}, options = {}) {
     handleCrossReference,
     handleMutualReview,
     log,
-    parseMessage
+    parseMessage,
+    getProviderLabel
   };
   `;
 
@@ -552,4 +553,51 @@ test('normal send includes doubao when its checkbox is selected', async () => {
   assert.equal(sendMessages.length, 1);
   assert.equal(sendMessages[0].aiType, 'doubao');
   assert.equal(sendMessages[0].message, '请给出你的判断');
+});
+
+test('parseMessage accepts Qianwen mentions in direct cross-reference syntax', () => {
+  const panel = loadPanel();
+
+  const parsed = panel.api.parseMessage('@Qianwen 评价一下 @Claude');
+
+  assert.equal(parsed.crossRef, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.targetAIs)), ['qianwen']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sourceAIs)), ['claude']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.mentions)), ['qianwen', 'claude']);
+});
+
+test('parseMessage accepts Qianwen in explicit /cross routing', () => {
+  const panel = loadPanel();
+
+  const parsed = panel.api.parseMessage('/cross @Claude @Qianwen <- @ChatGPT 对比一下');
+
+  assert.equal(parsed.crossRef, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.targetAIs)), ['claude', 'qianwen']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sourceAIs)), ['chatgpt']);
+  assert.equal(parsed.originalMessage, '对比一下');
+});
+
+test('normal send includes qianwen when its checkbox is selected', async () => {
+  const panel = loadPanel();
+
+  panel.getElementById('message-input').value = '请给出你的判断';
+  panel.getElementById('target-qianwen').checked = true;
+  panel.getElementById('target-claude').checked = false;
+  panel.getElementById('target-chatgpt').checked = false;
+  panel.getElementById('target-gemini').checked = false;
+  panel.getElementById('target-doubao').checked = false;
+
+  await panel.api.handleSend();
+
+  const sendMessages = panel.getSentMessages();
+
+  assert.equal(sendMessages.length, 1);
+  assert.equal(sendMessages[0].aiType, 'qianwen');
+  assert.equal(sendMessages[0].message, '请给出你的判断');
+});
+
+test('getProviderLabel maps qianwen to 千问', () => {
+  const panel = loadPanel();
+
+  assert.equal(panel.api.getProviderLabel('qianwen'), '千问');
 });
