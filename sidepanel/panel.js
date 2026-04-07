@@ -232,7 +232,7 @@ function setupEventListeners() {
       updateTabStatus(message.aiType, message.connected);
     } else if (message.type === 'RESPONSE_CAPTURED') {
       // Handle discussion mode response
-      if (discussionState.active && shouldHandleDiscussionCapture(message.aiType)) {
+      if (discussionState.active && shouldHandleDiscussionCapture(message.aiType, message.content)) {
         handleDiscussionResponse(message.aiType, message.content);
       } else if (shouldHandleNormalCapture(message.aiType, message.content)) {
         handleNormalResponse(message.aiType, message.content);
@@ -543,9 +543,33 @@ function startResponsePolling(controller, options) {
   syncPollingControllerAliases();
 }
 
-function shouldAcceptPolledNormalResponse(aiType, normalizedResponse) {
+function shouldAcceptPolledNormalResponse(aiType, normalizedResponse, _controller, responseMeta = {}) {
   const baseline = normalPollingController.baselines.get(aiType) || '';
-  return Boolean(normalizedResponse) && normalizedResponse !== baseline;
+  if (!normalizedResponse || normalizedResponse === baseline) {
+    return false;
+  }
+
+  const pollingState = normalPollingController.state.get(aiType) || {
+    lastObserved: baseline,
+    stableCount: 0
+  };
+
+  if (normalizedResponse !== pollingState.lastObserved) {
+    pollingState.lastObserved = normalizedResponse;
+    pollingState.stableCount = 0;
+    normalPollingController.state.set(aiType, pollingState);
+    return false;
+  }
+
+  if (responseMeta.streamingActive || responseMeta.captureState === 'unknown') {
+    pollingState.stableCount = 0;
+    normalPollingController.state.set(aiType, pollingState);
+    return false;
+  }
+
+  pollingState.stableCount += 1;
+  normalPollingController.state.set(aiType, pollingState);
+  return pollingState.stableCount >= 2;
 }
 
 function shouldHandleNormalCapture(aiType, content) {
@@ -558,7 +582,8 @@ function shouldHandleNormalCapture(aiType, content) {
 
 function handleNormalResponse(aiType, content) {
   const normalizedResponse = content?.trim() || '';
-  if (!shouldAcceptPolledNormalResponse(aiType, normalizedResponse)) {
+  const baseline = normalPollingController.baselines.get(aiType) || '';
+  if (!normalizedResponse || normalizedResponse === baseline) {
     return;
   }
 
@@ -583,7 +608,8 @@ async function captureNormalBaselines(aiTypes) {
 function startNormalResponsePolling() {
   startResponsePolling(normalPollingController, {
     shouldStop: () => normalPollingController.pending.size === 0,
-    shouldAccept: (ai, normalizedResponse) => shouldAcceptPolledNormalResponse(ai, normalizedResponse),
+    shouldAccept: (ai, normalizedResponse, controller, responseMeta) =>
+      shouldAcceptPolledNormalResponse(ai, normalizedResponse, controller, responseMeta),
     onAccept: (ai, normalizedResponse) => handleNormalResponse(ai, normalizedResponse)
   });
 }
@@ -815,8 +841,15 @@ async function startDiscussion() {
   }
 }
 
-function shouldHandleDiscussionCapture(aiType) {
+function shouldHandleDiscussionCapture(aiType, content) {
   if (!discussionState.active) return false;
+
+  const normalizedResponse = content?.trim() || '';
+  const baseline = discussionPollingController.baselines.get(aiType) || '';
+
+  if (!normalizedResponse || normalizedResponse === baseline) {
+    return false;
+  }
 
   if (discussionState.pendingResponses.has(aiType)) {
     return true;
@@ -835,6 +868,12 @@ function shouldHandleDiscussionCapture(aiType) {
 function handleDiscussionResponse(aiType, content) {
   if (!discussionState.active) return;
 
+  const normalizedResponse = content?.trim() || '';
+  const baseline = discussionPollingController.baselines.get(aiType) || '';
+  if (!normalizedResponse || normalizedResponse === baseline) {
+    return;
+  }
+
   const existingEntry = discussionState.history.find(
     entry =>
       entry.round === discussionState.currentRound &&
@@ -843,11 +882,13 @@ function handleDiscussionResponse(aiType, content) {
   );
 
   if (existingEntry) {
-    if (content.length <= existingEntry.content.length) {
+    if (normalizedResponse.length <= existingEntry.content.length) {
       return;
     }
 
-    existingEntry.content = content;
+    existingEntry.content = normalizedResponse;
+    discussionPollingController.baselines.set(aiType, normalizedResponse);
+    syncPollingControllerAliases();
     log(`讨论: ${aiType} 回复已更新 (第 ${discussionState.currentRound} 轮)`, 'success');
     return;
   }
@@ -857,8 +898,11 @@ function handleDiscussionResponse(aiType, content) {
     round: discussionState.currentRound,
     ai: aiType,
     type: discussionState.roundType,
-    content: content
+    content: normalizedResponse
   });
+
+  discussionPollingController.baselines.set(aiType, normalizedResponse);
+  syncPollingControllerAliases();
 
   // Remove from pending
   discussionState.pendingResponses.delete(aiType);
@@ -1200,8 +1244,6 @@ function startDiscussionResponsePolling() {
     shouldAccept: (ai, normalizedResponse, controller, responseMeta) =>
       shouldAcceptPolledDiscussionResponse(ai, normalizedResponse, controller, responseMeta),
     onAccept: (ai, normalizedResponse) => {
-      discussionPollingController.baselines.set(ai, normalizedResponse);
-      syncPollingControllerAliases();
       handleDiscussionResponse(ai, normalizedResponse);
     }
   });

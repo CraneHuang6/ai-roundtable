@@ -213,6 +213,36 @@ test('chatgpt getCaptureState returns unknown when latest assistant turn has tex
   assert.equal(api.getCaptureState(), 'unknown');
 });
 
+test('chatgpt capture does not lock a truncated long reply when streaming stops before the tail arrives', async () => {
+  const truncated = '我会把它的总体判断改成这样：这篇文';
+  const full = '我会把它的总体判断改成这样：这篇文章在论证结构上是成立的，但结尾需要补上风险边界与适用范围。';
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: true,
+    currentContent: truncated,
+    onTick(currentTick) {
+      if (currentTick === 6) {
+        this.isStreaming = false;
+        this.currentContent = truncated;
+      }
+      if (currentTick === 12) {
+        this.currentContent = full;
+      }
+    }
+  };
+
+  const { api, messages } = loadChatgptContent(state);
+
+  await api.waitForStreamingComplete();
+
+  const captures = messages.filter((message) => message.type === 'RESPONSE_CAPTURED');
+
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].content, full);
+  assert.ok(state.now >= 6000, `expected capture to wait past the early truncated plateau, got ${state.now}ms`);
+});
+
 test('chatgpt injectMessage clears lastCapturedContent before a new round starts', async () => {
   const state = {
     now: 0,

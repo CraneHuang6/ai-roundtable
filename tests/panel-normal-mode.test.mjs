@@ -269,10 +269,26 @@ function loadPanel(responseMap = {}, options = {}) {
           const entry = responseMap[message.aiType];
           if (Array.isArray(entry)) {
             const next = entry.length > 1 ? entry.shift() : entry[0] ?? null;
-            callback?.({ content: next || null });
+            if (next && typeof next === 'object' && !Array.isArray(next)) {
+              callback?.({
+                content: next.content ?? null,
+                streamingActive: Boolean(next.streamingActive),
+                captureState: next.captureState ?? 'complete'
+              });
+              return;
+            }
+            callback?.({ content: next || null, streamingActive: false, captureState: 'complete' });
             return;
           }
-          callback?.({ content: entry || null });
+          if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            callback?.({
+              content: entry.content ?? null,
+              streamingActive: Boolean(entry.streamingActive),
+              captureState: entry.captureState ?? 'complete'
+            });
+            return;
+          }
+          callback?.({ content: entry || null, streamingActive: false, captureState: 'complete' });
           return;
         }
         callback?.({ success: true, content: null });
@@ -457,6 +473,33 @@ test('normal send polls latest responses when push capture is missing', async ()
     pullMessages.length,
     2,
     'expected normal mode to capture a baseline and then actively poll GET_RESPONSE for a newer reply'
+  );
+});
+
+test('normal mode keeps ChatGPT pending when a truncated long reply is still unknown and only accepts the fuller tail later', async () => {
+  const panel = loadPanel({
+    chatgpt: [
+      { content: 'ChatGPT 的旧回复', streamingActive: false, captureState: 'complete' },
+      { content: '我会把它的总体判断改成这样：这篇文', streamingActive: false, captureState: 'unknown' },
+      { content: '我会把它的总体判断改成这样：这篇文', streamingActive: false, captureState: 'unknown' },
+      { content: '我会把它的总体判断改成这样：这篇文章在论证结构上是成立的，但结尾需要补上风险边界与适用范围。', streamingActive: false, captureState: 'complete' },
+      { content: '我会把它的总体判断改成这样：这篇文章在论证结构上是成立的，但结尾需要补上风险边界与适用范围。', streamingActive: false, captureState: 'complete' }
+    ]
+  });
+
+  panel.getElementById('message-input').value = '请继续展开';
+  panel.getElementById('target-chatgpt').checked = true;
+
+  await panel.api.handleSend();
+  await new Promise((resolve) => setTimeout(resolve, 2800));
+
+  const runtimeMessages = panel.getRuntimeMessages();
+  const pullMessages = runtimeMessages.filter((message) => message.type === 'GET_RESPONSE' && message.aiType === 'chatgpt');
+
+  assert.equal(panel.getElementById('send-btn').disabled, false);
+  assert.ok(
+    pullMessages.length >= 6,
+    `expected normal mode to keep polling through unknown plateau and fuller tail stabilization, got ${pullMessages.length}`
   );
 });
 

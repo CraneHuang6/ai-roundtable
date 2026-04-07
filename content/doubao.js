@@ -127,6 +127,12 @@
     }
 
     sendButton.click();
+    await sleep(200);
+
+    if (!didMessageLeaveInput(inputEl, text) && !isStreamingActive()) {
+      throw new Error('Message was not sent');
+    }
+
     waitForStreamingComplete();
     return true;
   }
@@ -184,6 +190,20 @@
       document.querySelector('button[aria-label*="停止"]') ||
       document.querySelector('button[aria-label*="Stop"]')
     );
+  }
+
+  function didMessageLeaveInput(inputEl, text) {
+    const normalizedText = String(text).trim();
+    if (!normalizedText) {
+      return true;
+    }
+
+    if (inputEl.tagName === 'TEXTAREA') {
+      return (inputEl.value || '').trim() !== normalizedText;
+    }
+
+    const currentText = (inputEl.innerText || inputEl.textContent || '').trim();
+    return currentText !== normalizedText;
   }
 
   function getLatestResponse() {

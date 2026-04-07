@@ -30,6 +30,37 @@ Common verification flows:
 - Discussion mode: choose exactly 2 participants, start a topic, then verify next round, interject, and summary
 - File upload: verify on Claude and ChatGPT; Gemini intentionally falls back to manual upload
 
+### Fixed regression checklist: ChatGPT long-response truncation
+
+Use this exact checklist after any change touching `content/chatgpt.js`, `sidepanel/panel.js`, shared polling helpers, or response-capture completion rules.
+
+1. **Provider capture layer (`content/chatgpt.js`)**
+   - Run `node --test tests/chatgpt-capture.test.mjs`
+   - Confirm the long-tail regression stays green:
+     - `chatgpt capture does not lock a truncated long reply when streaming stops before the tail arrives`
+   - This proves ChatGPT does not finalize on a truncated tail like `这篇文` before the fuller tail lands.
+
+2. **Normal mode closure (`sidepanel/panel.js` normal polling)**
+   - Run `node --test tests/panel-normal-mode.test.mjs`
+   - Confirm the normal-mode regression stays green:
+     - `normal mode keeps ChatGPT pending when a truncated long reply is still unknown and only accepts the fuller tail later`
+   - This proves normal send consumes `streamingActive` / `captureState` and does not accept `captureState === 'unknown'` as final.
+
+3. **Discussion round closure (`sidepanel/panel.js` discussion polling)**
+   - Run `node --test tests/panel-discussion.test.mjs`
+   - Confirm the discussion regressions stay green:
+     - `discussion mode keeps ChatGPT pending when a truncated long reply is still unknown and only completes after the fuller tail arrives`
+     - `discussion mode does not complete a round when ChatGPT completion readiness is unknown`
+   - This proves discussion rounds do not advance on truncated ChatGPT content and only close when the fuller tail is captured.
+
+4. **Manual Chrome spot check**
+   - Reload the unpacked extension
+   - Refresh the open ChatGPT tab so the updated content script reinjects
+   - In normal mode, send a prompt that reliably yields a long multi-paragraph answer; verify the final captured answer includes the tail paragraph instead of stopping at a half sentence
+   - In discussion mode, run at least one round where ChatGPT produces a long answer; verify the round stays pending until ChatGPT finishes and that the stored round entry matches the full answer
+
+If any one of these four checks fails, treat the truncation bug as still open; do not rely on a single passing layer.
+
 ## Architecture in one page
 
 The runtime has three layers:

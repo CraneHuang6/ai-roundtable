@@ -64,6 +64,14 @@ function loadDoubaoContent(state, options = {}) {
     clicked: false,
     click() {
       this.clicked = true;
+      if (!options.keepInputAfterClick) {
+        inputEl.value = '';
+        inputEl.innerHTML = '';
+        inputEl.textContent = '';
+      }
+      if (options.startStreamingAfterClick) {
+        state.isStreaming = true;
+      }
     },
     closest() {
       return this;
@@ -264,7 +272,7 @@ test('doubao injectMessage fills the contenteditable input and clicks send', asy
     fullContent: ''
   };
 
-  const { api, inputEl, sendButton } = loadDoubaoContent(state);
+  const { api, inputEl, sendButton } = loadDoubaoContent(state, { keepInputAfterClick: true });
 
   await api.injectMessage('请用中文总结这个问题');
 
@@ -283,7 +291,11 @@ test('doubao injectMessage drives textarea input state before clicking send', as
     fullContent: ''
   };
 
-  const { api, inputEl, sendButton, inputEvents } = loadDoubaoContent(state, { inputTagName: 'TEXTAREA' });
+  const { api, inputEl, sendButton, inputEvents } = loadDoubaoContent(state, {
+    inputTagName: 'TEXTAREA',
+    keepInputAfterClick: true,
+    startStreamingAfterClick: true
+  });
 
   await api.injectMessage('请用中文总结这个问题');
 
@@ -406,4 +418,30 @@ test('doubao injectMessage clears lastCapturedContent before a new round starts'
   await api.injectMessage('请继续下一轮讨论');
 
   assert.equal(api.getLastCapturedContent(), '');
+});
+
+test('doubao injectMessage does not start capture completion when send click leaves the prompt in the input', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '上一轮豆包回复',
+    partialContent: '',
+    fullContent: '',
+    onTick(currentTick) {
+      if (currentTick === 2) {
+        this.currentContent = '上一轮豆包回复';
+      }
+    }
+  };
+
+  const { api, inputEl, messages } = loadDoubaoContent(state, { inputTagName: 'TEXTAREA', keepInputAfterClick: true });
+
+  await assert.rejects(
+    api.injectMessage('第三轮发给豆包的新问题'),
+    /Message was not sent/
+  );
+
+  assert.equal(inputEl.value, '第三轮发给豆包的新问题');
+  assert.equal(messages.filter((message) => message.type === 'RESPONSE_CAPTURED').length, 0);
 });

@@ -734,6 +734,134 @@ test('discussion mode waits for ChatGPT unknown and 豆包 streaming states befo
   assert.match(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
 });
 
+test('discussion mode keeps ChatGPT pending when a truncated long reply is still unknown and only completes after the fuller tail arrives', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: 'ChatGPT 长回复尾巴不能在 discussion 里被截断',
+    participants: ['chatgpt', 'claude'],
+    currentRound: 1,
+    history: [
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第1轮完整回复' },
+      { round: 1, ai: 'claude', type: 'initial', content: 'Claude 第1轮完整回复' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'initial'
+  });
+
+  panel.setLatestResponses({
+    chatgpt: { content: 'ChatGPT 第1轮完整回复', streamingActive: false, captureState: 'complete' },
+    claude: { content: 'Claude 第1轮完整回复', streamingActive: false, captureState: 'complete' }
+  });
+
+  await panel.api.nextRound();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: '我会把它的总体判断改成这样：这篇文', streamingActive: false, captureState: 'unknown' },
+      claude: { content: 'Claude 第2轮完整回复', streamingActive: false, captureState: 'complete' }
+    });
+  }, 200);
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  let state = panel.api.getDiscussionState();
+  assert.equal(state.currentRound, 2);
+  assert.deepEqual(Array.from(state.pendingResponses), ['chatgpt']);
+  assert.equal(
+    state.history.find((entry) => entry.round === 2 && entry.ai === 'claude')?.content,
+    'Claude 第2轮完整回复'
+  );
+  assert.equal(
+    state.history.find((entry) => entry.round === 2 && entry.ai === 'chatgpt'),
+    undefined
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: '我会把它的总体判断改成这样：这篇文章在论证结构上是成立的，但结尾需要补上风险边界与适用范围。'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 2 && entry.ai === 'chatgpt')?.content,
+    '我会把它的总体判断改成这样：这篇文章在论证结构上是成立的，但结尾需要补上风险边界与适用范围。'
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
+  assert.match(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
+});
+
+test('discussion mode ignores stale 豆包 push capture from the previous round before a new response is really sent', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '第三轮豆包旧回复不能提前收口',
+    participants: ['claude', 'doubao'],
+    currentRound: 2,
+    history: [
+      { round: 1, ai: 'claude', type: 'initial', content: 'Claude 第1轮回复' },
+      { round: 1, ai: 'doubao', type: 'initial', content: '豆包第1轮回复' },
+      { round: 2, ai: 'claude', type: 'cross-eval', content: 'Claude 第2轮回复' },
+      { round: 2, ai: 'doubao', type: 'cross-eval', content: '豆包第2轮回复' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'cross-eval'
+  });
+
+  panel.setLatestResponses({
+    claude: { content: 'Claude 第2轮回复', streamingActive: false, captureState: 'complete' },
+    doubao: { content: '豆包第2轮回复', streamingActive: false, captureState: 'complete' }
+  });
+
+  await panel.api.nextRound();
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'doubao',
+    content: '豆包第2轮回复'
+  });
+
+  let state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses).sort(), ['claude', 'doubao']);
+  assert.equal(state.history.filter((entry) => entry.round === 3).length, 0);
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'claude',
+    content: 'Claude 第3轮完整回复'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['doubao']);
+  assert.equal(
+    state.history.find((entry) => entry.round === 3 && entry.ai === 'claude')?.content,
+    'Claude 第3轮完整回复'
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, true);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'doubao',
+    content: '豆包第3轮完整回复'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 3 && entry.ai === 'doubao')?.content,
+    '豆包第3轮完整回复'
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
+});
+
 test('discussion summary waits for fuller pushed responses before finalizing the summary view', async () => {
   const panel = loadPanel();
   const listener = panel.getOnMessageListener();

@@ -263,11 +263,14 @@
     let actionButtonsSeenCount = 0;
     let streamEndedStableCount = 0;
     let streamingSeen = false;
+    let streamEndObservedAt = null;
+    let streamEndLength = 0;
     const maxWait = 600000;  // 10 minutes
     const checkInterval = 500;
     const lengthStableThreshold = 60;  // 30 seconds fallback
     const actionButtonsThreshold = 4;  // 2 seconds with buttons
     const streamEndedStableThreshold = 3;  // 1.5 seconds after streaming ends
+    const streamEndedMinWaitMs = 4000;  // allow tail content to land after stop signal disappears
     const startTime = Date.now();
     let firstContentTime = null;
 
@@ -336,15 +339,33 @@
         }
 
         // Strategy 2: capture soon after streaming stops if content is stable
+        if (streamingSeen && !streamingActive && currentLength > 0) {
+          if (streamEndObservedAt === null) {
+            streamEndObservedAt = Date.now();
+            streamEndLength = currentLength;
+          }
+        } else {
+          streamEndObservedAt = null;
+          streamEndLength = 0;
+        }
+
         if (currentLength === previousLength && currentLength > 0) {
           lengthStableCount++;
 
           if (streamingSeen && !streamingActive) {
             streamEndedStableCount++;
-            if (streamEndedStableCount >= streamEndedStableThreshold) {
+            const streamEndedSettledLongEnough =
+              streamEndObservedAt !== null &&
+              Date.now() - streamEndObservedAt >= streamEndedMinWaitMs;
+            const streamEndedLengthAdvanced = currentLength > streamEndLength;
+            if (
+              streamEndedStableCount >= streamEndedStableThreshold &&
+              streamEndedSettledLongEnough &&
+              (streamEndedLengthAdvanced || currentLength >= 80)
+            ) {
               if (currentContent !== lastCapturedContent) {
                 lastCapturedContent = currentContent;
-                console.log('[AI Panel] ChatGPT capturing response (stream ended + stable), final length:', currentLength);
+                console.log('[AI Panel] ChatGPT capturing response (stream ended + settle window), final length:', currentLength);
                 safeSendMessage({
                   type: 'RESPONSE_CAPTURED',
                   aiType: AI_TYPE,
@@ -388,6 +409,10 @@
           lengthStableCount = 0;
           actionButtonsSeenCount = 0;
           streamEndedStableCount = 0;
+          if (streamingSeen && !streamingActive) {
+            streamEndObservedAt = Date.now();
+            streamEndLength = previousLength;
+          }
         } else {
           streamEndedStableCount = 0;
         }
