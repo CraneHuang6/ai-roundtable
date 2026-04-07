@@ -109,7 +109,13 @@ test('background maps Doubao host to doubao provider id', () => {
   assert.equal(api.getAITypeFromUrl('https://www.doubao.com/chat/123'), 'doubao');
 });
 
-test('background stored response defaults include doubao slot', async () => {
+test('background maps Qianwen entry host to qianwen provider id', () => {
+  const api = loadBackground();
+
+  assert.equal(api.getAITypeFromUrl('https://www.qianwen.com/?ch=tongyi_redirect'), 'qianwen');
+});
+
+test('background stored response defaults include doubao and qianwen slots', async () => {
   const api = loadBackground();
 
   const responses = await api.getStoredResponses();
@@ -118,7 +124,8 @@ test('background stored response defaults include doubao slot', async () => {
     claude: null,
     chatgpt: null,
     gemini: null,
-    doubao: null
+    doubao: null,
+    qianwen: null
   });
 });
 
