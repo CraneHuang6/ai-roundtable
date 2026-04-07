@@ -55,6 +55,11 @@
         <span class="target-name">豆包</span>
         <span class="status" id="status-doubao"></span>
       </label>
+      <label class="target-label">
+        <input type="checkbox" id="target-qianwen">
+        <span class="target-name">千问</span>
+        <span class="status" id="status-qianwen"></span>
+      </label>
     </section>
 
     <section class="input-section">
@@ -79,6 +84,7 @@
           <button class="mention-btn" data-mention="@ChatGPT" title="引用 ChatGPT">@ChatGPT</button>
           <button class="mention-btn" data-mention="@Gemini" title="引用 Gemini">@Gemini</button>
           <button class="mention-btn" data-mention="@Doubao" title="引用豆包">@Doubao</button>
+          <button class="mention-btn" data-mention="@Qianwen" title="引用千问">@Qianwen</button>
         </div>
       </div>
       <textarea
@@ -144,6 +150,10 @@
             <label class="participant-option">
               <input type="checkbox" name="participant" value="doubao">
               <span class="target-name doubao">豆包</span>
+            </label>
+            <label class="participant-option">
+              <input type="checkbox" name="participant" value="qianwen">
+              <span class="target-name qianwen">千问</span>
             </label>
           </div>
           <p class="hint">请选择 2~3 位参与者</p>

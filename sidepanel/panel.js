@@ -28,6 +28,13 @@ const PROVIDERS = [
     hosts: ['www.doubao.com'],
     mention: '@Doubao',
     supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
+  },
+  {
+    id: 'qianwen',
+    label: '千问',
+    hosts: ['www.qianwen.com'],
+    mention: '@Qianwen',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
   }
 ];
 
@@ -1252,6 +1259,7 @@ function startDiscussionResponsePolling() {
 function capitalize(str) {
   if (str === 'chatgpt') return 'ChatGPT';
   if (str === 'doubao') return '豆包';
+  if (str === 'qianwen') return '千问';
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
