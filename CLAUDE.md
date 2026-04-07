@@ -135,6 +135,7 @@ Provider-specific notes:
 - Gemini capture is simpler and more selector-sensitive
 - ChatGPT streaming capture strategy - 时间阈值策略不可靠（分段输出时段落间停顿时间不固定），必须采用双重保险：DOM 信号检测（操作按钮组出现）+ 长时间兜底（30秒长度稳定）。单纯依赖停止按钮或复制按钮检测会因 UI 变化导致选择器失效。
 - ChatGPT completion metadata in discussion polling - discussion/normal 侧的 `GET_RESPONSE` 若返回 `streamingActive` / `captureState`，收口必须消费这些元数据；`captureState === 'unknown'` 时继续等待，不要只因文本稳定就进入下一阶段。
+- Normal/discussion completion parity - `sidepanel/panel.js` 的 normal send 与 discussion polling 必须共用同一套 completion readiness 语义；修一边时同步检查另一边，避免一个消费 `captureState`、另一个只看文本变化而重新引入截断或提前收口。
 - Chrome extension content script cache - 修改 content script 后必须同时修改 manifest.json 版本号才能强制 Chrome 重新加载，否则浏览器会继续运行缓存的旧代码。仅点击"重新加载"按钮或刷新页面不足以清除 content script 缓存。
 - Gemini message injection - 文本设置后需触发多个事件（input, change, keydown, keyup）并延长等待时间（300ms）以确保发送按钮启用。添加 Ctrl+Enter 键盘快捷键作为备选发送方式。
 - Gemini background-tab response extraction - `content/gemini.js` 抓取最新回复时优先 `innerText`，但必须回退到 `textContent`；后台标签页里 `innerText` 可能为空或卡住，导致 summary 一直等到切回标签页才完成。
