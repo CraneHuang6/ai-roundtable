@@ -32,7 +32,7 @@ const PROVIDERS = [
   {
     id: 'qianwen',
     label: '千问',
-    hosts: ['www.qianwen.com'],
+    hosts: ['www.qianwen.com', 'www.qianwen.com/chat/'],
     mention: '@Qianwen',
     supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
   }

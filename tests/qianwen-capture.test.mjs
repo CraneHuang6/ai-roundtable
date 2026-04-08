@@ -92,7 +92,17 @@ function loadQianwenContent(state, options = {}) {
     body: createElement(),
     addEventListener() {},
     createElement() {
-      return { textContent: '', innerHTML: '' };
+      return {
+        textContent: '',
+        innerHTML: '',
+        remove() {},
+        set src(value) {
+          this._src = value;
+        },
+        get src() {
+          return this._src;
+        }
+      };
     },
     querySelector(selector) {
       if (selector === 'main' || selector === 'main, .semi-navigation, .semi-layout') return createElement();
@@ -117,10 +127,20 @@ function loadQianwenContent(state, options = {}) {
       ) {
         return state.isStreaming ? createElement() : null;
       }
+      if (selector === 'html') {
+        return { appendChild(node) { node.remove?.(); }, removeChild() {} };
+      }
       return null;
     },
     querySelectorAll(selector) {
       if (
+        selector === '.qk-markdown-complete .qk-md-text.complete' ||
+        selector === '.qk-markdown-complete .qk-md-paragraph' ||
+        selector === '.qk-markdown.qk-markdown-complete' ||
+        selector === '.qk-md-text.complete' ||
+        selector === '.answerItem-sQ6QT6 .qk-markdown' ||
+        selector === '.answerItem-sQ6QT6' ||
+        selector === '.qk-markdown' ||
         selector === '[data-testid="qianwen-assistant-message"]' ||
         selector === '.assistant-message' ||
         selector === '[data-role="assistant"]'
@@ -135,7 +155,17 @@ function loadQianwenContent(state, options = {}) {
           get textContent() {
             return state.currentContent;
           },
-          querySelector() {
+          querySelector(innerSelector) {
+            if (innerSelector === '.qk-markdown' || innerSelector === '.qk-md-paragraph') {
+              return {
+                get innerText() {
+                  return state.currentContent;
+                },
+                get textContent() {
+                  return state.currentContent;
+                }
+              };
+            }
             return null;
           }
         }];
@@ -155,6 +185,24 @@ function loadQianwenContent(state, options = {}) {
         addListener() {}
       }
     }
+  };
+
+  const customListeners = new Map();
+
+  document.addEventListener = function(type, listener) {
+    customListeners.set(type, listener);
+  };
+  document.removeEventListener = function(type, listener) {
+    if (customListeners.get(type) === listener) {
+      customListeners.delete(type);
+    }
+  };
+  document.dispatchEvent = function(event) {
+    const listener = customListeners.get(event.type);
+    if (listener) {
+      listener(event);
+    }
+    return true;
   };
 
   class MutationObserver {
@@ -218,6 +266,12 @@ function loadQianwenContent(state, options = {}) {
       now: () => state.now
     },
     Promise,
+    CustomEvent: class CustomEvent {
+      constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail;
+      }
+    },
     globalThis: null
   });
   context.globalThis = context;
@@ -257,6 +311,13 @@ test('qianwen injectMessage fills the contenteditable input and clicks send', as
   assert.equal(sendButton.clicked, true);
 });
 
+test('qianwen page-context submit waits for a send-observed signal instead of returning success immediately', async () => {
+  const source = fs.readFileSync(new URL('../content/qianwen.js', import.meta.url), 'utf8');
+
+  assert.match(source, /send-not-observed/);
+  assert.match(source, /findStopButton/);
+});
+
 test('qianwen injectMessage drives textarea input state before clicking send', async () => {
   const state = {
     now: 0,
@@ -279,6 +340,30 @@ test('qianwen injectMessage drives textarea input state before clicking send', a
   assert.equal(inputEl.value, '请用中文总结这个问题');
   assert.deepEqual(inputEvents.slice(0, 4), ['input', 'change', 'keydown', 'keyup']);
   assert.equal(sendButton.clicked, true);
+});
+
+test('qianwen injectMessage waits for the send button to become enabled after contenteditable input updates asynchronously', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api, inputEl, sendButton } = loadQianwenContent(state, { keepInputAfterClick: true });
+  sendButton.disabled = true;
+  state.onTick = () => {
+    sendButton.disabled = false;
+  };
+
+  await api.injectMessage('reply OK only');
+
+  assert.equal(inputEl.focused, true);
+  assert.match(inputEl.innerHTML, /reply OK only/);
+  assert.equal(sendButton.clicked, true);
+  assert.equal(sendButton.disabled, false);
 });
 
 test('qianwen capture waits for the fuller response before emitting RESPONSE_CAPTURED', async () => {

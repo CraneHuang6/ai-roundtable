@@ -6,7 +6,7 @@ const AI_URL_PATTERNS = {
   chatgpt: ['chat.openai.com', 'chatgpt.com'],
   gemini: ['gemini.google.com'],
   doubao: ['www.doubao.com'],
-  qianwen: ['www.qianwen.com']
+  qianwen: ['www.qianwen.com', 'www.qianwen.com/chat/']
 };
 
 // Store latest responses using chrome.storage.session (persists across service worker restarts)
@@ -103,11 +103,25 @@ async function sendMessageToAI(aiType, message) {
       return { success: false, error: `No ${aiType} tab found` };
     }
 
-    // Send message to content script
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: 'INJECT_MESSAGE',
-      message
-    });
+    let response;
+
+    try {
+      // Send message to content script
+      response = await chrome.tabs.sendMessage(tab.id, {
+        type: 'INJECT_MESSAGE',
+        message
+      });
+    } catch (err) {
+      if (aiType === 'qianwen') {
+        response = await sendMessageToQianwenViaDebugger(tab.id, message);
+      } else {
+        throw err;
+      }
+    }
+
+    if (aiType === 'qianwen' && response && response.success === false) {
+      response = await sendMessageToQianwenViaDebugger(tab.id, message);
+    }
 
     // Notify side panel
     notifySidePanel('SEND_RESULT', {
@@ -119,6 +133,150 @@ async function sendMessageToAI(aiType, message) {
     return response;
   } catch (err) {
     return { success: false, error: err.message };
+  }
+}
+
+async function sendMessageToQianwenViaDebugger(tabId, message) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+
+  try {
+    const inputPoint = await getQianwenInputPoint(target);
+    if (!inputPoint) {
+      return { success: false, error: 'Could not find input field' };
+    }
+
+    await clickDebuggerPoint(target, inputPoint);
+    await clearQianwenInputViaDebugger(target);
+    await typeQianwenMessageViaDebugger(target, message);
+
+    const sendPoint = await getQianwenSendPoint(target);
+    if (!sendPoint) {
+      return { success: false, error: 'Could not find send button' };
+    }
+
+    await clickDebuggerPoint(target, sendPoint);
+    return { success: true };
+  } finally {
+    await chrome.debugger.detach(target);
+  }
+}
+
+async function getQianwenInputPoint(target) {
+  const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(() => {
+      const input = document.querySelector('div[role="textbox"][contenteditable="true"]') ||
+        document.querySelector('[role="textbox"][contenteditable="true"]') ||
+        document.querySelector('div[contenteditable="true"]');
+      if (!input) return null;
+      const rect = input.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`,
+    returnByValue: true,
+    awaitPromise: true
+  });
+  return response?.result?.value || null;
+}
+
+async function getQianwenSendPoint(target) {
+  const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(() => {
+      const sendButton = Array.from(document.querySelectorAll('button')).find((button) => {
+        const label = button.getAttribute('aria-label') || '';
+        return label.includes('发送') && !button.disabled;
+      });
+      if (!sendButton) return null;
+      const rect = sendButton.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`,
+    returnByValue: true,
+    awaitPromise: true
+  });
+  return response?.result?.value || null;
+}
+
+async function clickDebuggerPoint(target, point) {
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  });
+}
+
+async function clearQianwenInputViaDebugger(target) {
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    key: 'a',
+    code: 'KeyA',
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    modifiers: 2
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'a',
+    code: 'KeyA',
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    modifiers: 2
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8
+  });
+}
+
+async function typeQianwenMessageViaDebugger(target, message) {
+  for (const char of message) {
+    const isAscii = char.charCodeAt(0) <= 0x7f;
+    if (isAscii) {
+      const key = char === ' ' ? ' ' : char;
+      const code = char === ' ' ? 'Space' : (/[a-z]/i.test(char) ? `Key${char.toUpperCase()}` : 'Unidentified');
+      const keyCode = char === ' ' ? 32 : (/[a-z]/i.test(char) ? char.toUpperCase().charCodeAt(0) : char.charCodeAt(0));
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key,
+        code,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+        text: char,
+        unmodifiedText: char
+      });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key,
+        code,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode
+      });
+      continue;
+    }
+
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'char',
+      text: char,
+      unmodifiedText: char,
+      key: char
+    });
   }
 }
 
