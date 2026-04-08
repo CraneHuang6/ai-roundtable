@@ -5,7 +5,7 @@
 
 > 让多个 AI 助手围桌讨论，交叉评价，深度协作
 
-一个 Chrome 扩展，让你像"会议主持人"一样，同时操控多个 AI（Claude、ChatGPT、Gemini、豆包），实现真正的 AI 圆桌会议。
+一个 Chrome 扩展，让你像"会议主持人"一样，同时操控多个 AI（Claude、ChatGPT、Gemini、豆包、千问），实现真正的 AI 圆桌会议。
 
 <!-- TODO: 添加 GIF 演示 -->
 <!-- ![Demo GIF](assets/demo.gif) -->
@@ -85,7 +85,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 - **文件上传** - 同时向多个 AI 发送图片或文档附件
 - **互评模式** - 让所有 AI 互相评价，对等参与（/mutual 命令）
 - **交叉引用** - 让 Claude 评价 ChatGPT 的回答，或反过来
-- **讨论模式** - 两个 AI 就同一主题进行多轮深度讨论
+- **讨论模式** - 2~3 个 AI 就同一主题进行多轮深度讨论，可从 Claude / ChatGPT / Gemini / 豆包 / 千问中选择参与者
 - **无需 API** - 直接操作网页界面，使用你现有的 AI 订阅
 
 ---
@@ -134,6 +134,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
    - [ChatGPT](https://chatgpt.com)
    - [Gemini](https://gemini.google.com)
    - [豆包](https://www.doubao.com/chat/)
+   - [千问](https://www.qianwen.com/?ch=tongyi_redirect)
 
 2. 推荐使用 Chrome 的 Split Tab 功能，将 2 个 AI 页面并排显示
 
@@ -146,7 +147,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 ### 普通模式
 
 **基本发送**
-1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包）
+1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包 / 千问）
 2. 输入消息
 3. 按 Enter 或点击「发送」按钮
 
