@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI 圆桌 - Multi-AI Roundtable",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "让多个 AI 助手围桌讨论，交叉评价，深度协作",
 
   "permissions": [
@@ -18,7 +18,8 @@
     "https://chatgpt.com/*",
     "https://gemini.google.com/*",
     "https://www.doubao.com/*",
-    "https://www.qianwen.com/*"
+    "https://www.qianwen.com/*",
+    "https://www.kimi.com/*"
   ],
 
   "side_panel": {
@@ -53,6 +54,11 @@
     {
       "matches": ["https://www.qianwen.com/*"],
       "js": ["content/qianwen.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.kimi.com/*"],
+      "js": ["content/kimi.js"],
       "run_at": "document_idle"
     }
   ],
