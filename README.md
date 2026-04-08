@@ -135,6 +135,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
    - [Gemini](https://gemini.google.com)
    - [豆包](https://www.doubao.com/chat/)
    - [千问](https://www.qianwen.com/?ch=tongyi_redirect)
+   - [Kimi](https://www.kimi.com/?chat_enter_method=new_chat)
 
 2. 推荐使用 Chrome 的 Split Tab 功能，将 2 个 AI 页面并排显示
 
@@ -147,7 +148,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 ### 普通模式
 
 **基本发送**
-1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包 / 千问）
+1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi）
 2. 输入消息
 3. 按 Enter 或点击「发送」按钮
 
@@ -188,7 +189,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 
 ### 讨论模式
 
-让 2~3 个 AI 就同一主题进行深度讨论：
+让 2~3 个 AI 就同一主题进行深度讨论（Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi 中任意 2~3 个）：
 
 1. 点击顶部「讨论」切换到讨论模式
 2. 选择 2~3 个参与讨论的 AI
@@ -221,7 +222,9 @@ ai-roundtable/
 │   ├── claude.js          # Claude 页面注入脚本
 │   ├── chatgpt.js         # ChatGPT 页面注入脚本
 │   ├── gemini.js          # Gemini 页面注入脚本
-│   └── doubao.js          # 豆包页面注入脚本
+│   ├── doubao.js          # 豆包页面注入脚本
+│   ├── qianwen.js         # 千问页面注入脚本
+│   └── kimi.js            # Kimi 页面注入脚本
 └── icons/                  # 扩展图标
 ```
 
@@ -260,7 +263,7 @@ ai-roundtable/
 
 - 依赖各 AI 平台的 DOM 结构，平台更新可能导致功能失效
 - 不支持 Claude Artifacts、ChatGPT Canvas 等特殊功能
-- **Gemini 与豆包不支持自动文件上传** - Gemini 因 Google 的安全限制需要手动上传；豆包本轮接入仅支持文本发送与回复捕获
+- **Gemini、豆包、千问、Kimi 不支持自动文件上传** - 本轮接入仅支持文本发送与回复捕获；若带文件发送，系统会跳过这些 provider，并继续向支持文件上传的 provider 发送
 
 ---
 

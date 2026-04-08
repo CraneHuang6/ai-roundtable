@@ -19,7 +19,8 @@
     "https://chatgpt.com/*",
     "https://gemini.google.com/*",
     "https://www.doubao.com/*",
-    "https://www.qianwen.com/*"
+    "https://www.qianwen.com/*",
+    "https://www.kimi.com/*"
   ],
 
   "side_panel": {
@@ -54,6 +55,11 @@
     {
       "matches": ["https://www.qianwen.com/*"],
       "js": ["content/qianwen.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.kimi.com/*"],
+      "js": ["content/kimi.js"],
       "run_at": "document_idle"
     }
   ],

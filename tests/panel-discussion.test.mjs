@@ -1299,3 +1299,25 @@ test('discussion participant badge uses 千问 instead of qianwen', async () => 
   assert.match(panel.getElementById('participants-badge').textContent, /千问/);
   assert.doesNotMatch(panel.getElementById('participants-badge').textContent, /qianwen/);
 });
+
+test('discussion mode enables start for a kimi-inclusive 3-person selection', () => {
+  const panel = loadPanel();
+
+  panel.setSelectedParticipants(['claude', 'chatgpt', 'kimi']);
+  panel.api.validateParticipants();
+
+  assert.equal(panel.getElementById('start-discussion-btn').disabled, false);
+});
+
+test('discussion participant badge uses Kimi instead of kimi', async () => {
+  const panel = loadPanel();
+
+  panel.setSelectedParticipants(['claude', 'kimi']);
+  panel.getElementById('discussion-topic').value = 'Kimi 参与讨论';
+
+  await panel.api.startDiscussion();
+
+  assert.match(panel.getElementById('participants-badge').textContent, /Claude/);
+  assert.match(panel.getElementById('participants-badge').textContent, /Kimi/);
+  assert.doesNotMatch(panel.getElementById('participants-badge').textContent, /kimi/);
+});

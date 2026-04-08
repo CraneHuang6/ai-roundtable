@@ -6,13 +6,14 @@ const AI_URL_PATTERNS = {
   chatgpt: ['chat.openai.com', 'chatgpt.com'],
   gemini: ['gemini.google.com'],
   doubao: ['www.doubao.com'],
-  qianwen: ['www.qianwen.com', 'www.qianwen.com/chat/']
+  qianwen: ['www.qianwen.com', 'www.qianwen.com/chat/'],
+  kimi: ['www.kimi.com']
 };
 
 // Store latest responses using chrome.storage.session (persists across service worker restarts)
 async function getStoredResponses() {
   const result = await chrome.storage.session.get('latestResponses');
-  return result.latestResponses || { claude: null, chatgpt: null, gemini: null, doubao: null, qianwen: null };
+  return result.latestResponses || { claude: null, chatgpt: null, gemini: null, doubao: null, qianwen: null, kimi: null };
 }
 
 async function setStoredResponse(aiType, content) {
