@@ -139,6 +139,7 @@ Provider-specific notes:
 - Chrome extension content script cache - 修改 content script 后必须同时修改 manifest.json 版本号才能强制 Chrome 重新加载，否则浏览器会继续运行缓存的旧代码。仅点击"重新加载"按钮或刷新页面不足以清除 content script 缓存。
 - Gemini message injection - 文本设置后需触发多个事件（input, change, keydown, keyup）并延长等待时间（300ms）以确保发送按钮启用。添加 Ctrl+Enter 键盘快捷键作为备选发送方式。
 - Gemini background-tab response extraction - `content/gemini.js` 抓取最新回复时优先 `innerText`，但必须回退到 `textContent`；后台标签页里 `innerText` 可能为空或卡住，导致 summary 一直等到切回标签页才完成。
+- Qianwen controlled-editor send verification - 千问这类受控编辑器里，DOM 写入成功不等于真实可发送；发送按钮可能在输入事件后异步启用，提交成功也不能只看“按钮找到了/点到了”或 page-context handler 返回成功，必须再验证发送后状态变化（如输入区内容变化、stop/streaming signal 出现、会话进入新状态）。
 - Sidepanel response closure ownership - 对 normal send、discussion 这类需要“等待新回复”的 sidepanel 流程，发送前先抓每个 AI 的 baseline，再用 pending 集合 + pull polling 收口；不要把发送前缓存的旧回复当成新结果，也不要把收口完全压在 provider push 上。
 - Shared polling helper - 当 normal mode 与 discussion mode 都依赖 baseline-driven polling 时，优先扩展 `createPollingController()` / `captureResponseBaselines()` / `startResponsePolling()` 这类共享 helper，不要再复制第二套 timer/baseline 状态机。
 - Sidepanel VM test harness cleanup - 对 `tests/panel-discussion.test.mjs`、`tests/panel-normal-mode.test.mjs` 这类通过 `vm.runInContext` 加载 sidepanel 的测试桩，若生产代码会创建 `setInterval`/`setTimeout`，测试桩必须包装 timer、暴露 `dispose()`，并在 `afterEach` 或测试结束路径统一清理，否则断言已通过也会因活跃 timer 导致 `node --test` 不退出。
