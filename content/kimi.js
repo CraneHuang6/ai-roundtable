@@ -70,14 +70,36 @@
     const selectors = [
       'button[aria-label*="发送"]',
       'button[aria-label*="Send"]',
-      'button[type="submit"]'
+      'button[type="submit"]',
+      '.send-button-container',
+      'svg[name="Send"]',
+      '.send-icon'
     ];
 
     for (const selector of selectors) {
       const el = document.querySelector(selector);
-      if (el && isVisible(el) && !el.disabled) {
-        return el.closest('button') || el;
+      if (!el || !isVisible(el)) {
+        continue;
       }
+
+      const buttonLike = el.closest('button') || el.parentElement?.closest?.('button') || el;
+      if (buttonLike.disabled || buttonLike.classList?.contains('disabled') || buttonLike.getAttribute?.('aria-disabled') === 'true') {
+        continue;
+      }
+
+      return buttonLike;
+    }
+    return null;
+  }
+
+  async function waitForSendButton(timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const sendButton = findSendButton();
+      if (sendButton) {
+        return sendButton;
+      }
+      await sleep(100);
     }
     return null;
   }
@@ -109,16 +131,26 @@
       inputEl.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
       inputEl.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
     } else {
-      inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
-      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-      inputEl.dispatchEvent(new Event('change', { bubbles: true }));
-      inputEl.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
-      inputEl.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      const selection = window.getSelection?.();
+      const range = document.createRange?.();
+      if (selection && range) {
+        range.selectNodeContents(inputEl);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      const inserted = document.execCommand?.('insertText', false, text);
+      if (!inserted) {
+        inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     }
 
     await sleep(200);
 
-    const sendButton = findSendButton();
+    const sendButton = await waitForSendButton();
     if (!sendButton) {
       throw new Error('Could not find send button');
     }
@@ -174,8 +206,8 @@
     if (isCapturing) return;
 
     const isResponse =
-      node.matches?.('[data-testid="kimi-assistant-message"], .assistant-message, [data-role="assistant"]') ||
-      node.querySelector?.('[data-testid="kimi-assistant-message"], .assistant-message, [data-role="assistant"]');
+      node.matches?.('[data-testid="kimi-assistant-message"], .assistant-message, [data-role="assistant"], .chat-content-item.chat-content-item-assistant, .chat-content-item-assistant, .segment.segment-assistant, .segment-assistant') ||
+      node.querySelector?.('[data-testid="kimi-assistant-message"], .assistant-message, [data-role="assistant"], .chat-content-item.chat-content-item-assistant, .chat-content-item-assistant, .segment.segment-assistant, .segment-assistant');
 
     if (isResponse) {
       waitForStreamingComplete();
@@ -193,14 +225,21 @@
     const selectors = [
       '[data-testid="kimi-assistant-message"]',
       '.assistant-message',
-      '[data-role="assistant"]'
+      '[data-role="assistant"]',
+      '.chat-content-item.chat-content-item-assistant',
+      '.chat-content-item-assistant',
+      '.segment.segment-assistant',
+      '.segment-assistant'
     ];
 
     for (const selector of selectors) {
       const messages = Array.from(document.querySelectorAll(selector));
       for (let i = messages.length - 1; i >= 0; i--) {
         const message = messages[i];
+        const richContent = message.querySelector?.('.markdown, .markdown-container');
         const content = (
+          richContent?.innerText ||
+          richContent?.textContent ||
           message.innerText ||
           message.textContent ||
           ''

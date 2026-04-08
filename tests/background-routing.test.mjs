@@ -262,3 +262,41 @@ test('background falls back to debugger-driven qianwen input when content script
   assert.equal(debuggerTargets[0].target.tabId, 8);
   assert.equal(debuggerCalls.some((call) => call.method === 'Runtime.evaluate'), true);
 });
+
+test('background uses debugger-driven kimi input and prefers chat tab over homepage', async () => {
+  const debuggerCalls = [];
+  const debuggerTargets = [];
+  const runtimeResults = [
+    { x: 220, y: 680 },
+    { x: 880, y: 720 }
+  ];
+  const api = loadBackground({}, {
+    tabs: [
+      { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' },
+      { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
+    ],
+    realtimeResponse: { success: true },
+    attachDebugger(target, version) {
+      debuggerTargets.push({ type: 'attach', target, version });
+    },
+    sendDebuggerCommand(target, method, params) {
+      debuggerCalls.push({ target, method, params });
+      if (method === 'Runtime.evaluate') {
+        return { result: { value: runtimeResults.shift() ?? null } };
+      }
+      return {};
+    },
+    detachDebugger(target) {
+      debuggerTargets.push({ type: 'detach', target });
+    }
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(response.success, true, JSON.stringify({ response, debuggerCalls, debuggerTargets }));
+  assert.equal(debuggerTargets[0].type, 'attach');
+  assert.equal(debuggerTargets[0].target.tabId, 10);
+  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchMouseEvent'), true);
+  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent'), true);
+  assert.equal(debuggerTargets.at(-1).type, 'detach');
+});

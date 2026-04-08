@@ -40,14 +40,20 @@ function createElement() {
 function loadKimiContent(state, options = {}) {
   const messages = [];
   const inputEvents = [];
+  const execCommands = [];
   const inputTagName = options.inputTagName || 'DIV';
   const exposeInput = options.exposeInput !== false;
+  const assistantSelectorMode = options.assistantSelectorMode || 'both';
+
+  const inputState = {
+    committedText: '',
+    transientHtml: '',
+    transientText: '',
+    value: ''
+  };
 
   const inputEl = {
     tagName: inputTagName,
-    innerHTML: '',
-    textContent: '',
-    value: '',
     focused: false,
     focus() {
       this.focused = true;
@@ -62,26 +68,82 @@ function loadKimiContent(state, options = {}) {
     }
   };
 
+  Object.defineProperty(inputEl, 'innerHTML', {
+    get() {
+      if (inputState.committedText) {
+        return `<p>${inputState.committedText}</p>`;
+      }
+      return inputState.transientHtml;
+    },
+    set(next) {
+      inputState.transientHtml = next;
+      inputState.transientText = String(next).replace(/<[^>]+>/g, '').trim();
+    }
+  });
+
+  Object.defineProperty(inputEl, 'textContent', {
+    get() {
+      return inputState.committedText || inputState.transientText;
+    },
+    set(next) {
+      inputState.transientText = next;
+    }
+  });
+
+  Object.defineProperty(inputEl, 'innerText', {
+    get() {
+      return inputState.committedText || inputState.transientText;
+    },
+    set(next) {
+      inputState.transientText = next;
+    }
+  });
+
+  Object.defineProperty(inputEl, 'value', {
+    get() {
+      return inputState.value;
+    },
+    set(next) {
+      inputState.value = next;
+      inputState.committedText = next;
+    }
+  });
+
   const sendButton = {
     disabled: false,
     clicked: false,
+    className: options.sendButtonClassName || 'send-button-container',
     click() {
+      if (this.disabled || this.classList.contains('disabled')) {
+        return;
+      }
       this.clicked = true;
       if (!options.keepInputAfterClick) {
-        inputEl.value = '';
-        inputEl.innerHTML = '';
-        inputEl.textContent = '';
+        inputState.value = '';
+        inputState.committedText = '';
+        inputState.transientHtml = '';
+        inputState.transientText = '';
       }
       if (options.startStreamingAfterClick) {
         state.isStreaming = true;
       }
     },
-    closest() {
+    closest(selector) {
+      if (!selector || selector === '.send-button-container') {
+        return this;
+      }
       return this;
     },
     getAttribute(name) {
       if (name === 'aria-label') return '发送';
+      if (name === 'aria-disabled') return this.className.includes('disabled') ? 'true' : null;
       return null;
+    }
+  };
+
+  sendButton.classList = {
+    contains(className) {
+      return sendButton.className.split(/\s+/).filter(Boolean).includes(className);
     }
   };
 
@@ -108,7 +170,14 @@ function loadKimiContent(state, options = {}) {
         selector === 'button[aria-label*="Send"]' ||
         selector === 'button[type="submit"]'
       ) {
-        return sendButton;
+        return options.sendControlMode === 'button' ? sendButton : null;
+      }
+      if (
+        selector === '.send-button-container' ||
+        selector === 'svg[name="Send"]' ||
+        selector === '.send-icon'
+      ) {
+        return inputState.committedText ? sendButton : null;
       }
       if (
         selector === 'button[aria-label*="停止"]' ||
@@ -119,11 +188,24 @@ function loadKimiContent(state, options = {}) {
       return null;
     },
     querySelectorAll(selector) {
-      if (
+      const legacyMatch =
         selector === '[data-testid="kimi-assistant-message"]' ||
         selector === '.assistant-message' ||
-        selector === '[data-role="assistant"]'
-      ) {
+        selector === '[data-role="assistant"]';
+      const realMatch =
+        selector === '.chat-content-item.chat-content-item-assistant' ||
+        selector === '.chat-content-item-assistant' ||
+        selector === '.segment.segment-assistant' ||
+        selector === '.segment-assistant';
+
+      const selectorAllowed =
+        assistantSelectorMode === 'both'
+          ? (legacyMatch || realMatch)
+          : assistantSelectorMode === 'real'
+            ? realMatch
+            : legacyMatch;
+
+      if (selectorAllowed) {
         if (!state.currentContent) {
           return [];
         }
@@ -134,7 +216,17 @@ function loadKimiContent(state, options = {}) {
           get textContent() {
             return state.currentContent;
           },
-          querySelector() {
+          querySelector(innerSelector) {
+            if (innerSelector === '.markdown, .markdown-container') {
+              return {
+                get innerText() {
+                  return state.currentContent;
+                },
+                get textContent() {
+                  return state.currentContent;
+                }
+              };
+            }
             return null;
           }
         }];
@@ -168,6 +260,16 @@ function loadKimiContent(state, options = {}) {
     }
   }
 
+  class Range {
+    selectNodeContents() {}
+    collapse() {}
+  }
+
+  const selection = {
+    removeAllRanges() {},
+    addRange() {}
+  };
+
   const context = vm.createContext({
     console,
     document,
@@ -192,11 +294,30 @@ function loadKimiContent(state, options = {}) {
     window: {
       getComputedStyle() {
         return { display: 'block', visibility: 'visible', opacity: '1' };
+      },
+      getSelection() {
+        return selection;
       }
     },
+    document: Object.assign(document, {
+      createRange() {
+        return new Range();
+      },
+      execCommand(command, _ui, value) {
+        execCommands.push({ command, value });
+        if (command === 'insertText') {
+          inputState.committedText += String(value ?? '');
+          return true;
+        }
+        return false;
+      }
+    }),
     setTimeout(fn, ms = 0) {
       state.now += ms;
       state.tick += 1;
+      if (options.enableSendAfterTick && state.tick === options.enableSendAfterTick) {
+        sendButton.className = sendButton.className.replace(/\s*disabled\b/g, '').trim() || 'send-button-container';
+      }
       if (typeof state.onTick === 'function') {
         state.onTick(state.tick);
       } else {
@@ -231,12 +352,13 @@ function loadKimiContent(state, options = {}) {
     api: context.__kimiTest,
     messages,
     inputEvents,
+    execCommands,
     inputEl,
     sendButton
   };
 }
 
-test('kimi injectMessage fills the contenteditable input and clicks send', async () => {
+test('kimi injectMessage uses execCommand-style insertion for contenteditable input before clicking send', async () => {
   const state = {
     now: 0,
     tick: 0,
@@ -246,12 +368,68 @@ test('kimi injectMessage fills the contenteditable input and clicks send', async
     fullContent: ''
   };
 
-  const { api, inputEl, sendButton } = loadKimiContent(state, { keepInputAfterClick: true });
+  const { api, inputEl, sendButton, execCommands } = loadKimiContent(state, { keepInputAfterClick: true, startStreamingAfterClick: true });
 
   await api.injectMessage('请用中文总结这个问题');
 
   assert.equal(inputEl.focused, true);
+  assert.deepEqual(execCommands, [{ command: 'insertText', value: '请用中文总结这个问题' }]);
   assert.match(inputEl.innerHTML, /请用中文总结这个问题/);
+  assert.equal(sendButton.clicked, true);
+});
+
+test('kimi injectMessage uses non-button send container when the page exposes svg send controls', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api, sendButton } = loadKimiContent(state, { keepInputAfterClick: true, startStreamingAfterClick: true });
+
+  await api.injectMessage('请只回复：KIMI-SEND-CONTAINER');
+
+  assert.equal(sendButton.clicked, true);
+});
+
+test('kimi getLatestResponse reads assistant reply from real Kimi chat DOM structure', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '这是 Kimi 在真实聊天 DOM 里的回复',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadKimiContent(state, { assistantSelectorMode: 'real' });
+
+  assert.equal(api.getLatestResponse(), '这是 Kimi 在真实聊天 DOM 里的回复');
+});
+
+test('kimi injectMessage waits for a delayed send container to become enabled before clicking', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api, sendButton } = loadKimiContent(state, {
+    keepInputAfterClick: true,
+    startStreamingAfterClick: true,
+    sendButtonClassName: 'send-button-container disabled',
+    enableSendAfterTick: 2
+  });
+
+  await api.injectMessage('请只回复：KIMI-DELAYED-SEND');
+
+  assert.equal(sendButton.classList.contains('disabled'), false);
   assert.equal(sendButton.clicked, true);
 });
 

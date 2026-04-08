@@ -106,22 +106,26 @@ async function sendMessageToAI(aiType, message) {
 
     let response;
 
-    try {
-      // Send message to content script
-      response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'INJECT_MESSAGE',
-        message
-      });
-    } catch (err) {
-      if (aiType === 'qianwen') {
-        response = await sendMessageToQianwenViaDebugger(tab.id, message);
-      } else {
-        throw err;
+    if (aiType === 'kimi') {
+      response = await sendMessageToKimiViaDebugger(tab.id, message);
+    } else {
+      try {
+        // Send message to content script
+        response = await chrome.tabs.sendMessage(tab.id, {
+          type: 'INJECT_MESSAGE',
+          message
+        });
+      } catch (err) {
+        if (aiType === 'qianwen') {
+          response = await sendMessageToQianwenViaDebugger(tab.id, message);
+        } else {
+          throw err;
+        }
       }
-    }
 
-    if (aiType === 'qianwen' && response && response.success === false) {
-      response = await sendMessageToQianwenViaDebugger(tab.id, message);
+      if (aiType === 'qianwen' && response && response.success === false) {
+        response = await sendMessageToQianwenViaDebugger(tab.id, message);
+      }
     }
 
     // Notify side panel
@@ -281,6 +285,132 @@ async function typeQianwenMessageViaDebugger(target, message) {
   }
 }
 
+async function sendMessageToKimiViaDebugger(tabId, message) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+
+  try {
+    const inputPoint = await getKimiInputPoint(target);
+    if (!inputPoint) {
+      return { success: false, error: 'Could not find input field' };
+    }
+
+    await clickDebuggerPoint(target, inputPoint);
+    await clearKimiInputViaDebugger(target);
+    await typeKimiMessageViaDebugger(target, message);
+
+    const sendPoint = await getKimiSendPoint(target);
+    if (!sendPoint) {
+      return { success: false, error: 'Could not find send button' };
+    }
+
+    await clickDebuggerPoint(target, sendPoint);
+    return { success: true };
+  } finally {
+    await chrome.debugger.detach(target);
+  }
+}
+
+async function getKimiInputPoint(target) {
+  const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(() => {
+      const input = document.querySelector('[role="textbox"][contenteditable="true"]') ||
+        document.querySelector('div[contenteditable="true"]') ||
+        document.querySelector('textarea');
+      if (!input) return null;
+      const rect = input.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`,
+    returnByValue: true,
+    awaitPromise: true
+  });
+  return response?.result?.value || null;
+}
+
+async function getKimiSendPoint(target) {
+  const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(() => {
+      const send = document.querySelector('.send-button-container:not(.disabled)') ||
+        document.querySelector('.send-icon')?.closest('.send-button-container') ||
+        document.querySelector('svg[name="Send"]')?.parentElement;
+      if (!send || send.classList?.contains('disabled')) return null;
+      const rect = send.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`,
+    returnByValue: true,
+    awaitPromise: true
+  });
+  return response?.result?.value || null;
+}
+
+async function clearKimiInputViaDebugger(target) {
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    key: 'a',
+    code: 'KeyA',
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    modifiers: 2
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'a',
+    code: 'KeyA',
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    modifiers: 2
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8
+  });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8
+  });
+}
+
+async function typeKimiMessageViaDebugger(target, message) {
+  for (const char of message) {
+    const isAscii = char.charCodeAt(0) <= 0x7f;
+    if (isAscii) {
+      const key = char === ' ' ? ' ' : char;
+      const code = char === ' ' ? 'Space' : (/[a-z]/i.test(char) ? `Key${char.toUpperCase()}` : 'Unidentified');
+      const keyCode = char === ' ' ? 32 : (/[a-z]/i.test(char) ? char.toUpperCase().charCodeAt(0) : char.charCodeAt(0));
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key,
+        code,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+        text: char,
+        unmodifiedText: char
+      });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key,
+        code,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode
+      });
+      continue;
+    }
+
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'char',
+      text: char,
+      unmodifiedText: char,
+      key: char
+    });
+  }
+}
+
 async function sendFilesToAI(aiType, files) {
   console.log('[AI Panel] Background: sendFilesToAI called for', aiType, 'files:', files?.length);
   try {
@@ -311,14 +441,20 @@ async function findAITab(aiType) {
   if (!patterns) return null;
 
   const tabs = await chrome.tabs.query({});
+  const matchingTabs = tabs.filter((tab) => tab.url && patterns.some((p) => tab.url.includes(p)));
 
-  for (const tab of tabs) {
-    if (tab.url && patterns.some(p => tab.url.includes(p))) {
-      return tab;
+  if (matchingTabs.length === 0) {
+    return null;
+  }
+
+  if (aiType === 'kimi' || aiType === 'qianwen') {
+    const chatTab = matchingTabs.find((tab) => tab.url.includes('/chat/'));
+    if (chatTab) {
+      return chatTab;
     }
   }
 
-  return null;
+  return matchingTabs[0];
 }
 
 function getAITypeFromUrl(url) {
