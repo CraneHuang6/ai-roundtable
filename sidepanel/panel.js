@@ -35,6 +35,13 @@ const PROVIDERS = [
     hosts: ['www.qianwen.com'],
     mention: '@Qianwen',
     supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    hosts: ['www.kimi.com'],
+    mention: '@Kimi',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
   }
 ];
 
