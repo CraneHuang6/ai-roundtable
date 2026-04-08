@@ -74,7 +74,7 @@ async function getResponseFromContentScript(aiType) {
     if (!tab) {
       // Fallback to stored response if tab not found
       const responses = await getStoredResponses();
-      return { content: responses[aiType] };
+      return { content: responses[aiType], streamingActive: false, captureState: 'unknown' };
     }
 
     // Query content script for real-time DOM content
@@ -91,7 +91,7 @@ async function getResponseFromContentScript(aiType) {
     // Fallback to stored response on error
     console.log('[AI Panel] Failed to get response from content script:', err.message);
     const responses = await getStoredResponses();
-    return { content: responses[aiType] };
+    return { content: responses[aiType], streamingActive: false, captureState: 'unknown' };
   }
 }
 
