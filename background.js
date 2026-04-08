@@ -298,13 +298,7 @@ async function sendMessageToKimiViaDebugger(tabId, message) {
     await clickDebuggerPoint(target, inputPoint);
     await clearKimiInputViaDebugger(target);
     await typeKimiMessageViaDebugger(target, message);
-
-    const sendPoint = await getKimiSendPoint(target);
-    if (!sendPoint) {
-      return { success: false, error: 'Could not find send button' };
-    }
-
-    await clickDebuggerPoint(target, sendPoint);
+    await submitKimiMessageViaDebugger(target);
     return { success: true };
   } finally {
     await chrome.debugger.detach(target);
@@ -327,20 +321,21 @@ async function getKimiInputPoint(target) {
   return response?.result?.value || null;
 }
 
-async function getKimiSendPoint(target) {
-  const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
-    expression: `(() => {
-      const send = document.querySelector('.send-button-container:not(.disabled)') ||
-        document.querySelector('.send-icon')?.closest('.send-button-container') ||
-        document.querySelector('svg[name="Send"]')?.parentElement;
-      if (!send || send.classList?.contains('disabled')) return null;
-      const rect = send.getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    })()`,
-    returnByValue: true,
-    awaitPromise: true
+async function submitKimiMessageViaDebugger(target) {
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    key: 'Enter',
+    code: 'Enter',
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
   });
-  return response?.result?.value || null;
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Enter',
+    code: 'Enter',
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
+  });
 }
 
 async function clearKimiInputViaDebugger(target) {

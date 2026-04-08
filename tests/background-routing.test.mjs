@@ -263,12 +263,11 @@ test('background falls back to debugger-driven qianwen input when content script
   assert.equal(debuggerCalls.some((call) => call.method === 'Runtime.evaluate'), true);
 });
 
-test('background uses debugger-driven kimi input and prefers chat tab over homepage', async () => {
+test('background uses debugger-driven kimi input with Enter submit and prefers chat tab over homepage', async () => {
   const debuggerCalls = [];
   const debuggerTargets = [];
   const runtimeResults = [
-    { x: 220, y: 680 },
-    { x: 880, y: 720 }
+    { x: 220, y: 680 }
   ];
   const api = loadBackground({}, {
     tabs: [
@@ -296,7 +295,7 @@ test('background uses debugger-driven kimi input and prefers chat tab over homep
   assert.equal(response.success, true, JSON.stringify({ response, debuggerCalls, debuggerTargets }));
   assert.equal(debuggerTargets[0].type, 'attach');
   assert.equal(debuggerTargets[0].target.tabId, 10);
+  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent' && call.params?.key === 'Enter'), true);
   assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchMouseEvent'), true);
-  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent'), true);
   assert.equal(debuggerTargets.at(-1).type, 'detach');
 });
