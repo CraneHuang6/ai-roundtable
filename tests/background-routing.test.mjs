@@ -90,9 +90,9 @@ function loadBackground(sessionState = {}, options = {}) {
   return context.__backgroundTest;
 }
 
-function loadBackgroundWithRealtimeResponse(realtimeResponse) {
+function loadBackgroundWithRealtimeResponse(realtimeResponse, tabUrl = 'https://www.kimi.com/?chat_enter_method=new_chat') {
   return loadBackground({}, {
-    tabs: [{ id: 1, url: 'https://www.doubao.com/chat/123' }],
+    tabs: [{ id: 1, url: tabUrl }],
     realtimeResponse
   });
 }
@@ -115,7 +115,13 @@ test('background maps Qianwen entry host to qianwen provider id', () => {
   assert.equal(api.getAITypeFromUrl('https://www.qianwen.com/?ch=tongyi_redirect'), 'qianwen');
 });
 
-test('background stored response defaults include doubao and qianwen slots', async () => {
+test('background maps Kimi host to kimi provider id', () => {
+  const api = loadBackground();
+
+  assert.equal(api.getAITypeFromUrl('https://www.kimi.com/?chat_enter_method=new_chat'), 'kimi');
+});
+
+test('background stored response defaults include doubao, qianwen, and kimi slots', async () => {
   const api = loadBackground();
 
   const responses = await api.getStoredResponses();
@@ -125,7 +131,8 @@ test('background stored response defaults include doubao and qianwen slots', asy
     chatgpt: null,
     gemini: null,
     doubao: null,
-    qianwen: null
+    qianwen: null,
+    kimi: null
   });
 });
 
@@ -133,10 +140,10 @@ test('background treats missing provider completion metadata as unknown instead 
   const api = loadBackground();
   globalThis.chrome = undefined;
 
-  const sourceApi = loadBackgroundWithRealtimeResponse({ content: '豆包第一段', streamingActive: undefined, captureState: undefined });
-  const response = await sourceApi.getResponseFromContentScript('doubao');
+  const sourceApi = loadBackgroundWithRealtimeResponse({ content: 'Kimi 第一段', streamingActive: undefined, captureState: undefined });
+  const response = await sourceApi.getResponseFromContentScript('kimi');
 
-  assert.equal(response.content, '豆包第一段');
+  assert.equal(response.content, 'Kimi 第一段');
   assert.equal(response.streamingActive, false);
   assert.equal(response.captureState, 'unknown');
 });
