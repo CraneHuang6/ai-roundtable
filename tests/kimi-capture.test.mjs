@@ -343,7 +343,7 @@ function loadKimiContent(state, options = {}) {
 
   const source = fs.readFileSync(new URL('../content/kimi.js', import.meta.url), 'utf8').replace(
     /\s*console\.log\('\[AI Panel\] Kimi content script loaded'\);\r?\n\}\)\(\);\s*$/,
-    "\n  globalThis.__kimiTest = { injectMessage, waitForStreamingComplete, getLatestResponse, isStreamingActive };\n  console.log('[AI Panel] Kimi content script loaded');\n})();\n"
+    "\n  globalThis.__kimiTest = { injectMessage, waitForStreamingComplete, getLatestResponse, isStreamingActive, getCaptureState };\n  console.log('[AI Panel] Kimi content script loaded');\n})();\n"
   );
 
   vm.runInContext(source, context);
@@ -452,6 +452,62 @@ test('kimi capture waits for the fuller response before emitting RESPONSE_CAPTUR
   assert.equal(captures.length, 1);
   assert.equal(captures[0].aiType, 'kimi');
   assert.equal(captures[0].content, '第一段观点\n\n第二段完整结论');
+});
+
+test('kimi getCaptureState returns streaming while stop signal is visible', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: true,
+    currentContent: '第一段观点',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadKimiContent(state);
+
+  assert.equal(api.getCaptureState(), 'streaming');
+});
+
+test('kimi getCaptureState returns complete after stable assistant content settles', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '这是已经稳定的 Kimi 完整回复',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadKimiContent(state, {
+    onTick(tick) {
+      if (tick >= 1) {
+        state.currentContent = '这是已经稳定的 Kimi 完整回复';
+      }
+    }
+  });
+
+  assert.equal(api.getCaptureState(), 'unknown');
+  assert.equal(api.getCaptureState(), 'unknown');
+  assert.equal(api.getCaptureState(), 'unknown');
+  assert.equal(api.getCaptureState(), 'complete');
+});
+
+test('kimi capture state stays complete after waitForStreamingComplete finishes', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: true,
+    currentContent: '',
+    partialContent: '第一段观点',
+    fullContent: '第一段观点\n\n第二段完整结论'
+  };
+
+  const { api } = loadKimiContent(state);
+
+  await api.waitForStreamingComplete();
+
+  assert.equal(api.getCaptureState(), 'complete');
 });
 
 test('kimi injectMessage throws a clear error when no input field is found', async () => {

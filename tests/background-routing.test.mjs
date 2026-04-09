@@ -53,9 +53,18 @@ function loadBackground(sessionState = {}, options = {}) {
         }
       },
       async query() {
-        return options.tabs ?? [];
+        return typeof options.queryTabs === 'function' ? await options.queryTabs() : (options.tabs ?? []);
       },
-      async sendMessage() {
+      async get(tabId) {
+        if (typeof options.getTab === 'function') {
+          return await options.getTab(tabId);
+        }
+        return (options.tabs ?? []).find((tab) => tab.id === tabId) ?? null;
+      },
+      async sendMessage(tabId, payload) {
+        if (typeof options.sendMessage === 'function') {
+          return await options.sendMessage(tabId, payload);
+        }
         if (options.sendMessageError) {
           throw options.sendMessageError;
         }
@@ -103,6 +112,12 @@ function loadBackground(sessionState = {}, options = {}) {
     Boolean,
     RegExp,
     JSON,
+    Date,
+    setTimeout(fn) {
+      fn();
+      return 0;
+    },
+    clearTimeout() {},
     globalThis: null
   });
   context.globalThis = context;
@@ -112,12 +127,19 @@ function loadBackground(sessionState = {}, options = {}) {
     getAITypeFromUrl,
     getStoredResponses,
     getResponseFromContentScript,
-    sendMessageToAI
+    sendMessageToAI,
+    handleMessage
   };
   `;
 
   vm.runInContext(source, context);
-  return context.__backgroundTest;
+  context.__backgroundListeners = listeners;
+  return context;
+}
+
+function getBackgroundApi(sessionState = {}, options = {}) {
+  const context = loadBackground(sessionState, options);
+  return { api: context.__backgroundTest, listeners: context.__backgroundListeners, context };
 }
 
 function loadBackgroundWithRealtimeResponse(realtimeResponse, tabUrl = 'https://www.kimi.com/?chat_enter_method=new_chat') {
@@ -263,18 +285,110 @@ test('background falls back to debugger-driven qianwen input when content script
   assert.equal(debuggerCalls.some((call) => call.method === 'Runtime.evaluate'), true);
 });
 
-test('background uses debugger-driven kimi input with Enter submit and prefers chat tab over homepage', async () => {
+test('background prefers content-script kimi send and still chooses chat tab over homepage', async () => {
+  const debuggerCalls = [];
+  const debuggerTargets = [];
+  const { api } = getBackgroundApi({}, {
+    tabs: [
+      { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' },
+      { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
+    ],
+    realtimeResponse: { success: true },
+    attachDebugger(target, version) {
+      debuggerTargets.push({ type: 'attach', target, version });
+    },
+    sendDebuggerCommand(target, method, params) {
+      debuggerCalls.push({ target, method, params });
+      return {};
+    },
+    detachDebugger(target) {
+      debuggerTargets.push({ type: 'detach', target });
+    }
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(response.success, true, JSON.stringify({ response, debuggerCalls, debuggerTargets }));
+  assert.equal(debuggerTargets.length, 0);
+  assert.equal(debuggerCalls.length, 0);
+});
+
+test('background retries content-script kimi send after tab finishes loading instead of falling back immediately', async () => {
+  const debuggerCalls = [];
+  const debuggerTargets = [];
+  let currentTab = {
+    id: 10,
+    url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat',
+    status: 'loading'
+  };
+  let sendAttempts = 0;
+
+  const { api, listeners } = getBackgroundApi({}, {
+    queryTabs() {
+      return [currentTab];
+    },
+    getTab() {
+      return currentTab;
+    },
+    async sendMessage(tabId, payload) {
+      sendAttempts += 1;
+      if (sendAttempts === 1) {
+        assert.equal(tabId, 10);
+        assert.equal(payload.type, 'INJECT_MESSAGE');
+        currentTab = { ...currentTab, status: 'complete' };
+        listeners.onUpdated?.(10, { status: 'complete' }, currentTab);
+        throw new Error('Could not establish connection. Receiving end does not exist.');
+      }
+      return { success: true };
+    },
+    attachDebugger(target, version) {
+      debuggerTargets.push({ type: 'attach', target, version });
+    },
+    sendDebuggerCommand(target, method, params) {
+      debuggerCalls.push({ target, method, params });
+      return {};
+    },
+    detachDebugger(target) {
+      debuggerTargets.push({ type: 'detach', target });
+    }
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(response.success, true, JSON.stringify({ response, sendAttempts, debuggerCalls, debuggerTargets }));
+  assert.equal(sendAttempts, 2, JSON.stringify({ response, sendAttempts }));
+  assert.equal(debuggerTargets.length, 0, JSON.stringify({ response, debuggerTargets }));
+  assert.equal(debuggerCalls.length, 0, JSON.stringify({ response, debuggerCalls }));
+});
+
+test('background falls back to debugger-driven kimi input when content-script send fails', async () => {
   const debuggerCalls = [];
   const debuggerTargets = [];
   const runtimeResults = [
-    { x: 220, y: 680 }
+    { x: 220, y: 680 },
+    {
+      inputText: 'reply with KIMI only',
+      sendDisabled: false,
+      stopVisible: false,
+      userTurnCount: 1,
+      assistantTurnCount: 1,
+      lastAssistantText: '旧回复'
+    },
+    {
+      inputText: '',
+      sendDisabled: true,
+      stopVisible: true,
+      userTurnCount: 2,
+      assistantTurnCount: 1,
+      lastAssistantText: '旧回复'
+    }
   ];
   const api = loadBackground({}, {
     tabs: [
       { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' },
       { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
     ],
-    realtimeResponse: { success: true },
+    sendMessageError: new Error('Message was not sent'),
     attachDebugger(target, version) {
       debuggerTargets.push({ type: 'attach', target, version });
     },
@@ -297,5 +411,64 @@ test('background uses debugger-driven kimi input with Enter submit and prefers c
   assert.equal(debuggerTargets[0].target.tabId, 10);
   assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent' && call.params?.key === 'Enter'), true);
   assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchMouseEvent'), true);
+  assert.equal(debuggerCalls.filter((call) => call.method === 'Runtime.evaluate').length >= 3, true);
   assert.equal(debuggerTargets.at(-1).type, 'detach');
+});
+
+test('background fails kimi send when content script fails and post-send debugger signals are not observed', async () => {
+  const debuggerCalls = [];
+  const runtimeResponses = [
+    { x: 220, y: 680 },
+    {
+      inputText: 'reply with KIMI only',
+      sendDisabled: false,
+      stopVisible: false,
+      userTurnCount: 1,
+      assistantTurnCount: 1,
+      lastAssistantText: '旧回复'
+    }
+  ];
+  const stagnantObservation = {
+    inputText: '',
+    sendDisabled: true,
+    stopVisible: false,
+    userTurnCount: 1,
+    assistantTurnCount: 1,
+    lastAssistantText: '旧回复'
+  };
+  const api = loadBackground({}, {
+    tabs: [
+      { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
+    ],
+    sendMessageError: new Error('Message was not sent'),
+    attachDebugger() {},
+    sendDebuggerCommand(target, method, params) {
+      debuggerCalls.push({ target, method, params });
+      if (method === 'Runtime.evaluate') {
+        const value = runtimeResponses.length > 0 ? runtimeResponses.shift() : stagnantObservation;
+        return { result: { value } };
+      }
+      return {};
+    },
+    detachDebugger() {}
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(response.success, false, JSON.stringify({ response, debuggerCalls }));
+  assert.match(response.error, /Kimi send not observed/);
+  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent' && call.params?.key === 'Enter'), true);
+});
+
+test('background refuses kimi homepage tab when no chat tab exists', async () => {
+  const api = loadBackground({}, {
+    tabs: [
+      { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' }
+    ]
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(response.success, false, JSON.stringify(response));
+  assert.match(response.error, /No kimi chat tab found/);
 });

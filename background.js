@@ -98,34 +98,41 @@ async function getResponseFromContentScript(aiType) {
 async function sendMessageToAI(aiType, message) {
   try {
     // Find the tab for this AI
-    const tab = await findAITab(aiType);
+    const tab = await findAITab(aiType, { requireChatRoute: aiType === 'kimi' });
 
     if (!tab) {
-      return { success: false, error: `No ${aiType} tab found` };
+      const suffix = aiType === 'kimi' ? ' chat tab' : ' tab';
+      return { success: false, error: `No ${aiType}${suffix} found` };
     }
 
     let response;
 
-    if (aiType === 'kimi') {
-      response = await sendMessageToKimiViaDebugger(tab.id, message);
-    } else {
-      try {
-        // Send message to content script
-        response = await chrome.tabs.sendMessage(tab.id, {
-          type: 'INJECT_MESSAGE',
-          message
-        });
-      } catch (err) {
-        if (aiType === 'qianwen') {
-          response = await sendMessageToQianwenViaDebugger(tab.id, message);
+    try {
+      // Send message to content script
+      response = await sendMessageToContentScript(tab.id, message);
+    } catch (err) {
+      if (aiType === 'kimi' && shouldRetryKimiContentScriptSend(err, tab)) {
+        const retried = await retryKimiContentScriptSend(tab.id, message);
+        if (retried) {
+          response = retried;
         } else {
-          throw err;
+          response = await sendMessageToKimiViaDebugger(tab.id, message);
         }
-      }
-
-      if (aiType === 'qianwen' && response && response.success === false) {
+      } else if (aiType === 'qianwen') {
         response = await sendMessageToQianwenViaDebugger(tab.id, message);
+      } else if (aiType === 'kimi') {
+        response = await sendMessageToKimiViaDebugger(tab.id, message);
+      } else {
+        throw err;
       }
+    }
+
+    if (aiType === 'qianwen' && response && response.success === false) {
+      response = await sendMessageToQianwenViaDebugger(tab.id, message);
+    }
+
+    if (aiType === 'kimi' && response && response.success === false) {
+      response = await sendMessageToKimiViaDebugger(tab.id, message);
     }
 
     // Notify side panel
@@ -139,6 +146,48 @@ async function sendMessageToAI(aiType, message) {
   } catch (err) {
     return { success: false, error: err.message };
   }
+}
+
+async function sendMessageToContentScript(tabId, message) {
+  return await chrome.tabs.sendMessage(tabId, {
+    type: 'INJECT_MESSAGE',
+    message
+  });
+}
+
+function shouldRetryKimiContentScriptSend(err, tab) {
+  return Boolean(
+    err &&
+    /Receiving end does not exist/i.test(err.message || '') &&
+    tab &&
+    tab.status === 'loading'
+  );
+}
+
+async function retryKimiContentScriptSend(tabId, message) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const refreshedTab = await chrome.tabs.get(tabId);
+    if (!refreshedTab) {
+      return null;
+    }
+
+    if (refreshedTab.status !== 'complete') {
+      await sleep(200);
+      continue;
+    }
+
+    try {
+      return await sendMessageToContentScript(tabId, message);
+    } catch (err) {
+      if (/Receiving end does not exist/i.test(err.message || '')) {
+        await sleep(200);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return null;
 }
 
 async function sendMessageToQianwenViaDebugger(tabId, message) {
@@ -298,7 +347,19 @@ async function sendMessageToKimiViaDebugger(tabId, message) {
     await clickDebuggerPoint(target, inputPoint);
     await clearKimiInputViaDebugger(target);
     await typeKimiMessageViaDebugger(target, message);
+
+    const baseline = await getKimiSendObservation(target);
+    if (!baseline) {
+      return { success: false, error: 'Could not observe Kimi send state' };
+    }
+
     await submitKimiMessageViaDebugger(target);
+
+    const observed = await waitForKimiSendObserved(target, baseline);
+    if (!observed) {
+      return { success: false, error: 'Kimi send not observed' };
+    }
+
     return { success: true };
   } finally {
     await chrome.debugger.detach(target);
@@ -336,6 +397,125 @@ async function submitKimiMessageViaDebugger(target) {
     windowsVirtualKeyCode: 13,
     nativeVirtualKeyCode: 13
   });
+}
+
+async function getKimiSendObservation(target) {
+  const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(() => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle?.(element);
+        if (!style) return true;
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+      };
+      const selectors = {
+        input: [
+          '[role="textbox"][contenteditable="true"]',
+          'div[contenteditable="true"]',
+          'textarea'
+        ],
+        send: [
+          'button[aria-label*="发送"]',
+          'button[aria-label*="Send"]',
+          'button[type="submit"]',
+          '.send-button-container',
+          'svg[name="Send"]',
+          '.send-icon'
+        ],
+        stop: [
+          'button[aria-label*="停止"]',
+          'button[aria-label*="Stop"]'
+        ],
+        user: [
+          '[data-testid="kimi-user-message"]',
+          '[data-role="user"]',
+          '.chat-content-item.chat-content-item-user',
+          '.chat-content-item-user',
+          '.segment.segment-user',
+          '.segment-user'
+        ],
+        assistant: [
+          '[data-testid="kimi-assistant-message"]',
+          '.assistant-message',
+          '[data-role="assistant"]',
+          '.chat-content-item.chat-content-item-assistant',
+          '.chat-content-item-assistant',
+          '.segment.segment-assistant',
+          '.segment-assistant'
+        ]
+      };
+      const findFirstVisible = (selectorList) => {
+        for (const selector of selectorList) {
+          const elements = Array.from(document.querySelectorAll(selector));
+          for (const element of elements) {
+            if (isVisible(element)) {
+              return element;
+            }
+          }
+        }
+        return null;
+      };
+      const getText = (element) => (element?.innerText || element?.textContent || element?.value || '').trim();
+      const getMessages = (selectorList) => {
+        for (const selector of selectorList) {
+          const messages = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+          if (messages.length > 0) {
+            return messages;
+          }
+        }
+        return [];
+      };
+      const input = findFirstVisible(selectors.input);
+      const sendControl = findFirstVisible(selectors.send);
+      const assistantMessages = getMessages(selectors.assistant);
+      const userMessages = getMessages(selectors.user);
+      const lastAssistant = assistantMessages[assistantMessages.length - 1] || null;
+      const lastAssistantRich = lastAssistant?.querySelector?.('.markdown, .markdown-container');
+      const buttonLike = sendControl?.closest?.('button') || sendControl?.parentElement?.closest?.('button') || sendControl;
+      return {
+        inputText: getText(input),
+        sendDisabled: !buttonLike || Boolean(buttonLike.disabled || buttonLike.classList?.contains?.('disabled') || buttonLike.getAttribute?.('aria-disabled') === 'true'),
+        stopVisible: selectors.stop.some((selector) => Boolean(findFirstVisible([selector]))),
+        userTurnCount: userMessages.length,
+        assistantTurnCount: assistantMessages.length,
+        lastAssistantText: getText(lastAssistantRich) || getText(lastAssistant)
+      };
+    })()`,
+    returnByValue: true,
+    awaitPromise: true
+  });
+  return response?.result?.value || null;
+}
+
+function isKimiSendObserved(baseline, current) {
+  if (!baseline || !current) {
+    return false;
+  }
+
+  const inputCleared = !String(current.inputText || '').trim();
+  const strongSignal = Boolean(
+    current.stopVisible ||
+    current.userTurnCount > baseline.userTurnCount ||
+    current.assistantTurnCount > baseline.assistantTurnCount ||
+    (current.lastAssistantText && current.lastAssistantText !== baseline.lastAssistantText)
+  );
+
+  return inputCleared && strongSignal;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForKimiSendObserved(target, baseline, maxAttempts = 30) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const current = await getKimiSendObservation(target);
+    if (isKimiSendObserved(baseline, current)) {
+      return true;
+    }
+    await sleep(200);
+  }
+  return false;
 }
 
 async function clearKimiInputViaDebugger(target) {
@@ -431,7 +611,7 @@ async function sendFilesToAI(aiType, files) {
   }
 }
 
-async function findAITab(aiType) {
+async function findAITab(aiType, options = {}) {
   const patterns = AI_URL_PATTERNS[aiType];
   if (!patterns) return null;
 
@@ -446,6 +626,9 @@ async function findAITab(aiType) {
     const chatTab = matchingTabs.find((tab) => tab.url.includes('/chat/'));
     if (chatTab) {
       return chatTab;
+    }
+    if (aiType === 'kimi' && options.requireChatRoute) {
+      return null;
     }
   }
 

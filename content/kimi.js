@@ -42,7 +42,7 @@
       sendResponse({
         content,
         streamingActive,
-        captureState: streamingActive ? 'streaming' : 'unknown'
+        captureState: getCaptureState()
       });
       return true;
     }
@@ -106,6 +106,7 @@
 
   async function injectMessage(text) {
     lastCapturedContent = '';
+    resetCaptureStateTracker();
 
     const inputEl = findInput();
     if (!inputEl) {
@@ -168,6 +169,74 @@
 
   let lastCapturedContent = '';
   let isCapturing = false;
+  const captureStateTracker = {
+    lastContent: '',
+    lastContentChangeAt: null,
+    lastSettledContent: '',
+    stableReadCount: 0
+  };
+
+  function resetCaptureStateTracker() {
+    captureStateTracker.lastContent = '';
+    captureStateTracker.lastContentChangeAt = null;
+    captureStateTracker.lastSettledContent = '';
+    captureStateTracker.stableReadCount = 0;
+  }
+
+  function updateCaptureStateTracker(content) {
+    const normalizedContent = (content || '').trim();
+    const now = Date.now();
+
+    if (!normalizedContent) {
+      captureStateTracker.lastContent = '';
+      captureStateTracker.lastContentChangeAt = null;
+      captureStateTracker.stableReadCount = 0;
+      return;
+    }
+
+    if (normalizedContent !== captureStateTracker.lastContent) {
+      captureStateTracker.lastContent = normalizedContent;
+      captureStateTracker.lastContentChangeAt = now;
+      captureStateTracker.stableReadCount = 1;
+    } else {
+      captureStateTracker.stableReadCount += 1;
+      if (captureStateTracker.lastContentChangeAt === null) {
+        captureStateTracker.lastContentChangeAt = now;
+      }
+    }
+  }
+
+  function getCaptureState() {
+    const content = getLatestResponse();
+    const streamingActive = isStreamingActive();
+    updateCaptureStateTracker(content);
+
+    if (streamingActive) {
+      return 'streaming';
+    }
+
+    const normalizedContent = (content || '').trim();
+    if (!normalizedContent) {
+      return 'unknown';
+    }
+
+    if (captureStateTracker.lastSettledContent && normalizedContent === captureStateTracker.lastSettledContent) {
+      return 'complete';
+    }
+
+    if (
+      captureStateTracker.stableReadCount >= 4 ||
+      (
+        captureStateTracker.lastContentChangeAt !== null &&
+        Date.now() - captureStateTracker.lastContentChangeAt >= 1500
+      )
+    ) {
+      captureStateTracker.lastSettledContent = normalizedContent;
+      return 'complete';
+    }
+
+    return 'unknown';
+  }
 
   function setupResponseObserver() {
     const observer = new MutationObserver((mutations) => {
@@ -299,6 +368,7 @@
           currentContent &&
           ((streamingSeen && endedStableCount >= endAfterStreamingThreshold) || stableCount >= stableThreshold)
         ) {
+          captureStateTracker.lastSettledContent = currentContent;
           if (currentContent !== lastCapturedContent) {
             lastCapturedContent = currentContent;
             safeSendMessage({
