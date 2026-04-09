@@ -4,6 +4,19 @@
   'use strict';
 
   const AI_TYPE = 'chatgpt';
+  const STOP_SELECTORS = [
+    'button[aria-label*="Stop"]',
+    'button[data-testid="stop-button"]',
+    '[data-testid="stop-button"]',
+    'button[aria-label*="Stop generating"]'
+  ];
+  const ASSISTANT_CONTAINER_SELECTORS = [
+    '[data-message-author-role="assistant"]',
+    '[data-testid*="conversation-turn"]:has([data-message-author-role="assistant"])',
+    '.agent-turn'
+  ];
+  const ACTION_BUTTONS_COMPLETE_THRESHOLD = 3;
+  const CAPTURE_STATE_SETTLE_MS = 5000;
 
   // Check if extension context is still valid
   function isContextValid() {
@@ -59,6 +72,7 @@
 
   async function injectMessage(text) {
     lastCapturedContent = '';
+    resetCaptureStateTracker();
 
     // ChatGPT uses a contenteditable div (previously textarea, changed in 2025+)
     const inputSelectors = [
@@ -190,6 +204,106 @@
 
   let lastCapturedContent = '';
   let isCapturing = false;
+  const captureStateTracker = {
+    lastContent: '',
+    firstNonEmptyAt: null,
+    lastContentChangeAt: null,
+    sawStreaming: false,
+    streamEndedAt: null
+  };
+
+  function resetCaptureStateTracker() {
+    captureStateTracker.lastContent = '';
+    captureStateTracker.firstNonEmptyAt = null;
+    captureStateTracker.lastContentChangeAt = null;
+    captureStateTracker.sawStreaming = false;
+    captureStateTracker.streamEndedAt = null;
+  }
+
+  function isStopButtonVisible() {
+    return STOP_SELECTORS.some(selector => document.querySelector(selector));
+  }
+
+  function getAssistantContainers() {
+    let containers = [];
+    for (const selector of ASSISTANT_CONTAINER_SELECTORS) {
+      containers = document.querySelectorAll(selector);
+      if (containers.length > 0) break;
+    }
+    return Array.from(containers);
+  }
+
+  function findLatestAssistantContainer() {
+    const containers = getAssistantContainers();
+    for (let i = containers.length - 1; i >= 0; i--) {
+      const candidate = containers[i];
+      const candidateText = (candidate.innerText || candidate.textContent || '').trim();
+      const candidateStructuredText = Array.from(candidate.querySelectorAll('.markdown, [class*="markdown"], [class*="canvas"], [class*="text-block"], [class*="code-block"], pre code'))
+        .map(el => (el.innerText || el.textContent || '').trim())
+        .find(Boolean);
+      if (candidateText || candidateStructuredText) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function getActionButtonCount(container) {
+    const buttonGroup = container?.parentElement?.querySelector('[class*="group"]') ||
+      container?.nextElementSibling;
+    return buttonGroup ? buttonGroup.querySelectorAll('button').length : 0;
+  }
+
+  function updateCaptureStateTracker(content, streamingActive) {
+    const normalizedContent = (content || '').trim();
+    const now = Date.now();
+
+    if (streamingActive) {
+      captureStateTracker.sawStreaming = true;
+      captureStateTracker.streamEndedAt = null;
+    }
+
+    if (!normalizedContent) {
+      captureStateTracker.lastContent = '';
+      captureStateTracker.firstNonEmptyAt = null;
+      captureStateTracker.lastContentChangeAt = null;
+      return;
+    }
+
+    if (captureStateTracker.firstNonEmptyAt === null) {
+      captureStateTracker.firstNonEmptyAt = now;
+    }
+
+    if (normalizedContent !== captureStateTracker.lastContent) {
+      captureStateTracker.lastContent = normalizedContent;
+      captureStateTracker.lastContentChangeAt = now;
+    } else if (captureStateTracker.lastContentChangeAt === null) {
+      captureStateTracker.lastContentChangeAt = now;
+    }
+
+    if (!streamingActive && captureStateTracker.streamEndedAt === null) {
+      captureStateTracker.streamEndedAt = now;
+    }
+  }
+
+  function hasSettledCompletionEvidence() {
+    if (!captureStateTracker.lastContent || captureStateTracker.lastContentChangeAt === null) {
+      return false;
+    }
+
+    const now = Date.now();
+    const stableLongEnough = now - captureStateTracker.lastContentChangeAt >= CAPTURE_STATE_SETTLE_MS;
+    if (!stableLongEnough) {
+      return false;
+    }
+
+    if (captureStateTracker.sawStreaming && captureStateTracker.streamEndedAt !== null) {
+      return now - captureStateTracker.streamEndedAt >= CAPTURE_STATE_SETTLE_MS;
+    }
+
+    return captureStateTracker.firstNonEmptyAt !== null &&
+      now - captureStateTracker.firstNonEmptyAt >= CAPTURE_STATE_SETTLE_MS;
+  }
 
   function checkForResponse(node) {
     if (isCapturing) return;
@@ -210,41 +324,32 @@
   }
 
   function getCaptureState() {
-    const stopSelectors = [
-      'button[aria-label*="Stop"]',
-      'button[data-testid="stop-button"]',
-      '[data-testid="stop-button"]',
-      'button[aria-label*="Stop generating"]'
-    ];
+    const streamingActive = isStopButtonVisible();
+    const content = getLatestResponse();
+    updateCaptureStateTracker(content, streamingActive);
 
-    if (stopSelectors.some(selector => document.querySelector(selector))) {
+    if (streamingActive) {
       return 'streaming';
     }
 
-    const containers = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-    for (let i = containers.length - 1; i >= 0; i--) {
-      const lastContainer = containers[i];
-      const content = getLatestResponse();
-      const buttonGroup = lastContainer.parentElement?.querySelector('[class*="group"]') ||
-                         lastContainer.nextElementSibling;
+    const lastContainer = findLatestAssistantContainer();
+    if (!lastContainer || !content) {
+      return 'unknown';
+    }
 
-      if (buttonGroup) {
-        const buttons = buttonGroup.querySelectorAll('button');
-        if (buttons.length >= 3) {
-          return 'complete';
-        }
-      }
+    if (getActionButtonCount(lastContainer) >= ACTION_BUTTONS_COMPLETE_THRESHOLD) {
+      return 'complete';
+    }
 
-      if (content) {
-        return 'unknown';
-      }
+    if (hasSettledCompletionEvidence()) {
+      return 'complete';
     }
 
     return 'unknown';
   }
 
   function isStreamingActive() {
-    return getCaptureState() === 'streaming';
+    return isStopButtonVisible();
   }
 
   async function waitForStreamingComplete() {
@@ -286,6 +391,7 @@
         const currentContent = getLatestResponse() || '';
         const currentLength = currentContent.length;
         const streamingActive = isStreamingActive();
+        updateCaptureStateTracker(currentContent, streamingActive);
         if (streamingActive) {
           streamingSeen = true;
         }
@@ -298,43 +404,34 @@
 
         // Strategy 1: Detect action buttons (copy, like, dislike, share, regenerate)
         // These appear when message is complete
-        const containers = document.querySelectorAll('[data-message-author-role="assistant"]');
+        const lastContainer = findLatestAssistantContainer();
         let hasActionButtons = false;
 
-        if (containers.length > 0) {
-          const lastContainer = containers[containers.length - 1];
+        if (lastContainer) {
+          const actionButtonCount = getActionButtonCount(lastContainer);
+          hasActionButtons = actionButtonCount >= ACTION_BUTTONS_COMPLETE_THRESHOLD;
 
-          // Look for the action button group - usually appears after the message
-          // Try multiple strategies to find buttons
-          const buttonGroup = lastContainer.parentElement?.querySelector('[class*="group"]') ||
-                             lastContainer.nextElementSibling;
+          if (hasActionButtons) {
+            actionButtonsSeenCount++;
+            console.log(`[AI Panel] ChatGPT action buttons detected (${actionButtonCount} buttons), count: ${actionButtonsSeenCount}/${actionButtonsThreshold}`);
 
-          if (buttonGroup) {
-            const buttons = buttonGroup.querySelectorAll('button');
-            hasActionButtons = buttons.length >= 3;  // Usually 4-5 buttons when complete
-
-            if (hasActionButtons) {
-              actionButtonsSeenCount++;
-              console.log(`[AI Panel] ChatGPT action buttons detected (${buttons.length} buttons), count: ${actionButtonsSeenCount}/${actionButtonsThreshold}`);
-
-              if (actionButtonsSeenCount >= actionButtonsThreshold) {
-                if (currentContent !== lastCapturedContent) {
-                  lastCapturedContent = currentContent;
-                  console.log('[AI Panel] ChatGPT capturing response (action buttons confirmed), final length:', currentLength);
-                  safeSendMessage({
-                    type: 'RESPONSE_CAPTURED',
-                    aiType: AI_TYPE,
-                    content: currentContent
-                  });
-                  console.log('[AI Panel] ChatGPT response captured and sent!');
-                } else {
-                  console.log('[AI Panel] ChatGPT content same as last capture, skipping');
-                }
-                return;
+            if (actionButtonsSeenCount >= actionButtonsThreshold) {
+              if (currentContent !== lastCapturedContent) {
+                lastCapturedContent = currentContent;
+                console.log('[AI Panel] ChatGPT capturing response (action buttons confirmed), final length:', currentLength);
+                safeSendMessage({
+                  type: 'RESPONSE_CAPTURED',
+                  aiType: AI_TYPE,
+                  content: currentContent
+                });
+                console.log('[AI Panel] ChatGPT response captured and sent!');
+              } else {
+                console.log('[AI Panel] ChatGPT content same as last capture, skipping');
               }
-            } else {
-              actionButtonsSeenCount = 0;
+              return;
             }
+          } else {
+            actionButtonsSeenCount = 0;
           }
         }
 
@@ -438,11 +535,7 @@
       '.agent-turn'
     ];
 
-    let containers = [];
-    for (const selector of containerSelectors) {
-      containers = document.querySelectorAll(selector);
-      if (containers.length > 0) break;
-    }
+    const containers = getAssistantContainers();
 
     if (containers.length === 0) return null;
 
@@ -542,7 +635,7 @@
       });
 
       structuredBlocks.forEach(({ el }) => {
-        addContentPart(el.innerText);
+        addContentPart(el.innerText || el.textContent || '');
       });
     }
 
@@ -550,7 +643,7 @@
       return contentParts.join('\n\n').trim();
     }
 
-    return lastContainer.innerText.trim();
+    return (lastContainer.innerText || lastContainer.textContent || '').trim();
   }
 
   // Utility functions

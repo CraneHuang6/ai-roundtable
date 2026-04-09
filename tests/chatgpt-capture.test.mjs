@@ -133,7 +133,7 @@ function loadChatgptContent(state) {
       state.now += ms;
       state.tick += 1;
       if (typeof state.onTick === 'function') {
-        state.onTick(state.tick);
+        state.onTick(state.tick, state.now);
       } else if (state.tick === 8) {
         state.isStreaming = false;
         state.currentContent = '开头框架。\n\n完整结论与展开内容。';
@@ -241,6 +241,26 @@ test('chatgpt capture does not lock a truncated long reply when streaming stops 
   assert.equal(captures.length, 1);
   assert.equal(captures[0].content, full);
   assert.ok(state.now >= 6000, `expected capture to wait past the early truncated plateau, got ${state.now}ms`);
+});
+
+test('chatgpt getCaptureState upgrades to complete after stable content settles without action buttons', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '这是一条已经写完的回复',
+    onTick(_currentTick, now) {
+      if (now >= 5000) {
+        this.currentContent = '这是一条已经写完的回复';
+      }
+    }
+  };
+
+  const { api } = loadChatgptContent(state);
+
+  assert.equal(api.getCaptureState(), 'unknown');
+  state.now = 6000;
+  assert.equal(api.getCaptureState(), 'complete');
 });
 
 test('chatgpt injectMessage clears lastCapturedContent before a new round starts', async () => {
