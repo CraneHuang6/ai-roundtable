@@ -178,6 +178,8 @@ Hard rule: every discussion-stage prompt (initial, cross-evaluation, interject, 
 - Long text UI regression tests - 对长文本 UI 回归优先在 `tests/panel-discussion.test.mjs` / `tests/panel-normal-mode.test.mjs` 里做结构性断言，至少覆盖 shared markup、折叠滚动、展开态取消高度限制。
 - Discussion responsive spec - discussion 模式布局调整后，优先把“主操作优先”的规则沉淀到 `docs/superpowers/specs/2026-04-03-discussion-responsive-spec.md`，并在 README / 相关实现计划里挂引用，避免规范变成孤岛。
 - Real extension host validation via MCP - 若 `chrome://extensions` 在 MCP 浏览器里看不到本地 unpacked extension，先看 `chrome://version` 的启动参数；若存在隔离的 `--user-data-dir` 且带 `--disable-extensions`，这说明是 MCP 浏览器上下文限制，不要误判为本仓库扩展没有正确加载。
+- Kimi chat materialization preflight - 真机 discussion / send 验收里，`https://www.kimi.com/chat/` 裸跳转可能仍回到首页；若首页已暴露历史会话 `/chat/...` 链接，优先沿真实站点入口进入。只有当 Kimi 页面实际落在 chat 会话且出现输入框/发送控件时，才算满足发送前置。
+- Kimi capacity blocker classification - 若 `AI Panel`、`ChatGPT`、Kimi 入口链都已 materialize，但 Kimi 页面明确提示“刚刚和 Kimi 聊的人太多了”或“高峰期算力不足”，应归因为 provider 站点侧可用性阻塞，不要继续改扩展路由、selector 或 discussion 编排。
 - Git worktree cleanup order - 本仓库使用 `.worktrees/` 时，合并后的清理顺序必须先 `git worktree remove <path>` 再 `git branch -d <branch>`，反过来会被 git 拦截。
 - Discussion 2~3 participants generalization - 从固定双人扩展到 2~3 人时，核心策略是用 `participants` 数组替代 `[ai1, ai2]` 解构，用 `otherParticipants = participants.filter(p => p !== current)` 替代硬编码对方，所有循环改为 `for (const ai of participants)`。测试先行，确保失败来自生产代码限制而非测试设计问题。
 - Discussion test assertion precision - 测试断言应验证意图而非具体文案：如"包含三个参与者名字且不含 vs"优于"精确匹配 `Claude · ChatGPT · Gemini`"；summary 卡片数量验证应只计算总结区而非整个 HTML。
