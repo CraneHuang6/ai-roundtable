@@ -601,6 +601,43 @@ test('discussion mode does not complete a round when ChatGPT completion readines
   );
 });
 
+test('discussion mode can complete a round after Claude readiness upgrades from unknown to complete', async () => {
+  const panel = loadPanel();
+  panel.setSelectedParticipants(['chatgpt', 'claude']);
+  panel.setLatestResponses({
+    chatgpt: { content: '旧的 ChatGPT 回复', streamingActive: false, captureState: 'complete' },
+    claude: { content: '旧的 Claude 回复', streamingActive: false, captureState: 'complete' }
+  });
+  panel.getElementById('discussion-topic').value = 'Claude unknown 升级后应由 polling 收口';
+
+  await panel.api.startDiscussion();
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: 'ChatGPT 首轮完整回复', streamingActive: false, captureState: 'complete' },
+      claude: { content: 'Claude 首轮回复（状态未知，不能确认已结束）', streamingActive: false, captureState: 'unknown' }
+    });
+  }, 200);
+
+  setTimeout(() => {
+    panel.setLatestResponses({
+      chatgpt: { content: 'ChatGPT 首轮完整回复', streamingActive: false, captureState: 'complete' },
+      claude: { content: 'Claude 首轮回复（状态未知，不能确认已结束）', streamingActive: false, captureState: 'complete' }
+    });
+  }, 1600);
+
+  await new Promise((resolve) => setTimeout(resolve, 3200));
+
+  const state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 1 && entry.ai === 'claude')?.content,
+    'Claude 首轮回复（状态未知，不能确认已结束）'
+  );
+  assert.match(panel.getElementById('discussion-status').textContent, /第 1 轮完成/);
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
+});
+
 test('discussion mode keeps round 2 pending when ChatGPT and 豆包 are both still streaming', async () => {
   const panel = loadPanel();
   const listener = panel.getOnMessageListener();
