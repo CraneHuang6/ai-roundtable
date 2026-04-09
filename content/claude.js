@@ -43,8 +43,13 @@
     }
 
     if (message.type === 'GET_LATEST_RESPONSE') {
-      const response = getLatestResponse();
-      sendResponse({ content: response });
+      const content = getLatestResponse();
+      const captureState = getCaptureState();
+      sendResponse({
+        content,
+        streamingActive: captureState === 'streaming',
+        captureState
+      });
       return true;
     }
   });
@@ -53,7 +58,36 @@
   setupResponseObserver();
 
   async function injectMessage(text) {
-    // Claude uses a contenteditable div with ProseMirror
+    lastCapturedContent = '';
+    lastCompletionState = 'idle';
+
+    const inputEl = findInput();
+    if (!inputEl) {
+      throw new Error('Could not find input field');
+    }
+
+    inputEl.focus();
+    fillContenteditableInput(inputEl, text);
+
+    await sleep(200);
+
+    const submitted = await submitMessage();
+    if (!submitted) {
+      throw new Error('Could not find send button');
+    }
+
+    await sleep(200);
+
+    if (!didMessageLeaveInput(inputEl, text) && !isStreamingActive()) {
+      throw new Error('Message was not sent');
+    }
+
+    console.log('[AI Panel] Claude message sent, starting response capture...');
+    waitForStreamingComplete();
+    return true;
+  }
+
+  function findInput() {
     const inputSelectors = [
       'div[contenteditable="true"].ProseMirror',
       'div.ProseMirror[contenteditable="true"]',
@@ -61,66 +95,62 @@
       'fieldset div[contenteditable="true"]'
     ];
 
-    let inputEl = null;
     for (const selector of inputSelectors) {
-      inputEl = document.querySelector(selector);
-      if (inputEl) break;
+      const inputEl = document.querySelector(selector);
+      if (inputEl) {
+        return inputEl;
+      }
     }
 
-    if (!inputEl) {
-      throw new Error('Could not find input field');
-    }
+    return null;
+  }
 
-    // Focus the input
-    inputEl.focus();
-
-    // Clear existing content and set new text
-    // For ProseMirror, we need to simulate typing or use clipboard
+  function fillContenteditableInput(inputEl, text) {
     inputEl.innerHTML = `<p>${escapeHtml(text)}</p>`;
-
-    // Dispatch input event to trigger React state update
     inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    inputEl.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+    inputEl.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  }
 
-    // Small delay to let React process
-    await sleep(100);
-
-    // Find and click the send button
-    const sendButton = findSendButton();
+  async function submitMessage() {
+    let sendButton = findSendButton();
     if (!sendButton) {
-      throw new Error('Could not find send button');
+      await sleep(300);
+      sendButton = findSendButton();
+    }
+
+    if (!sendButton) {
+      return false;
     }
 
     sendButton.click();
-
-    // Start capturing response after sending
-    console.log('[AI Panel] Claude message sent, starting response capture...');
-    waitForStreamingComplete();
-
     return true;
   }
 
   function findSendButton() {
-    // Claude's send button is typically an SVG arrow or button with specific attributes
     const selectors = [
       'button[aria-label="Send message"]',
       'button[aria-label="Send Message"]',
       'button[type="submit"]',
       'fieldset button:last-of-type',
-      'button svg[viewBox]' // Button containing an SVG
+      'button svg[viewBox]'
     ];
 
     for (const selector of selectors) {
       const el = document.querySelector(selector);
-      if (el) {
-        // If we found an SVG, get its parent button
-        return el.closest('button') || el;
+      const button = el?.closest('button') || el;
+      if (button && isVisible(button) && !button.disabled) {
+        return button;
       }
     }
 
-    // Fallback: find button near the input
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
-      if (btn.querySelector('svg') && isVisible(btn)) {
+      if (!btn || btn.disabled || !isVisible(btn)) {
+        continue;
+      }
+      if (btn.querySelector('svg')) {
         const rect = btn.getBoundingClientRect();
         if (rect.bottom > window.innerHeight - 200) {
           return btn;
@@ -168,6 +198,7 @@
   }
 
   let lastCapturedContent = '';
+  let lastCompletionState = 'idle';
   let isCapturing = false;
 
   function checkForResponse(node) {
@@ -188,6 +219,40 @@
     }
   }
 
+  function getCaptureState() {
+    if (isStreamingActive()) {
+      return 'streaming';
+    }
+
+    const content = getLatestResponse();
+    if (!content) {
+      return 'idle';
+    }
+
+    if (lastCompletionState === 'complete' && content === lastCapturedContent) {
+      return 'complete';
+    }
+
+    return 'unknown';
+  }
+
+  function isStreamingActive() {
+    return Boolean(
+      document.querySelector('[data-is-streaming="true"]') ||
+      document.querySelector('button[aria-label*="Stop"]')
+    );
+  }
+
+  function didMessageLeaveInput(inputEl, text) {
+    const normalizedText = String(text).trim();
+    if (!normalizedText) {
+      return true;
+    }
+
+    const currentText = (inputEl.innerText || inputEl.textContent || '').trim();
+    return currentText !== normalizedText;
+  }
+
   async function waitForStreamingComplete() {
     if (isCapturing) {
       console.log('[AI Panel] Claude already capturing, skipping...');
@@ -197,10 +262,12 @@
 
     let previousContent = '';
     let stableCount = 0;
-    const maxWait = 600000;  // 10 minutes - AI responses can be very long
+    let streamingSeen = false;
+    let endedStableCount = 0;
+    const maxWait = 600000;
     const checkInterval = 500;
-    const stableThreshold = 4;  // 2 seconds of stable content
-
+    const stableThreshold = 4;
+    const endAfterStreamingThreshold = 2;
     const startTime = Date.now();
 
     try {
@@ -212,27 +279,39 @@
 
         await sleep(checkInterval);
 
-        const isStreaming = document.querySelector('[data-is-streaming="true"]') ||
-                           document.querySelector('button[aria-label*="Stop"]');
-
         const currentContent = getLatestResponse() || '';
+        const streamingActive = isStreamingActive();
+        if (streamingActive) {
+          streamingSeen = true;
+        }
 
-        if (!isStreaming && currentContent === previousContent && currentContent.length > 0) {
-          stableCount++;
-          if (stableCount >= stableThreshold) {
-            if (currentContent !== lastCapturedContent) {
-              lastCapturedContent = currentContent;
-              safeSendMessage({
-                type: 'RESPONSE_CAPTURED',
-                aiType: AI_TYPE,
-                content: currentContent
-              });
-              console.log('[AI Panel] Claude response captured, length:', currentContent.length);
-            }
-            return;
-          }
+        if (currentContent && currentContent === previousContent) {
+          stableCount += 1;
         } else {
           stableCount = 0;
+        }
+
+        if (streamingSeen && !streamingActive && currentContent) {
+          endedStableCount += currentContent === previousContent ? 1 : 0;
+        } else {
+          endedStableCount = 0;
+        }
+
+        if (
+          currentContent &&
+          ((streamingSeen && endedStableCount >= endAfterStreamingThreshold) || stableCount >= stableThreshold)
+        ) {
+          lastCompletionState = 'complete';
+          if (currentContent !== lastCapturedContent) {
+            lastCapturedContent = currentContent;
+            safeSendMessage({
+              type: 'RESPONSE_CAPTURED',
+              aiType: AI_TYPE,
+              content: currentContent
+            });
+            console.log('[AI Panel] Claude response captured, length:', currentContent.length);
+          }
+          return;
         }
 
         previousContent = currentContent;
