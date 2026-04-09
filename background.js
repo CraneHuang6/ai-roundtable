@@ -16,10 +16,69 @@ async function getStoredResponses() {
   return result.latestResponses || { claude: null, chatgpt: null, gemini: null, doubao: null, qianwen: null, kimi: null };
 }
 
-async function setStoredResponse(aiType, content) {
+function normalizeStoredResponse(entry, options = {}) {
+  if (!entry) {
+    return { content: null, streamingActive: false, captureState: 'complete', fromStorage: Boolean(options.fromStorage) };
+  }
+
+  if (typeof entry === 'object' && !Array.isArray(entry)) {
+    return {
+      content: entry.content ?? null,
+      streamingActive: Boolean(entry.streamingActive),
+      captureState: entry.captureState || 'complete',
+      updatedAt: entry.updatedAt,
+      url: entry.url,
+      fromStorage: Boolean(options.fromStorage)
+    };
+  }
+
+  return {
+    content: entry,
+    streamingActive: false,
+    captureState: 'complete',
+    fromStorage: Boolean(options.fromStorage)
+  };
+}
+
+async function setStoredResponse(aiType, content, metadata = {}) {
   const responses = await getStoredResponses();
-  responses[aiType] = content;
+  responses[aiType] = {
+    content,
+    updatedAt: metadata.updatedAt || Date.now(),
+    streamingActive: Boolean(metadata.streamingActive),
+    captureState: metadata.captureState || 'complete',
+    url: metadata.url
+  };
   await chrome.storage.session.set({ latestResponses: responses });
+}
+
+async function getPanelSession() {
+  const result = await chrome.storage.session.get('panelSession');
+  return result.panelSession || null;
+}
+
+async function setPanelSession(session) {
+  const currentSession = await getPanelSession();
+  const nextVersion = Number(session?.version || 0);
+  const currentVersion = Number(currentSession?.version || 0);
+
+  if (currentSession && nextVersion < currentVersion) {
+    return;
+  }
+
+  await chrome.storage.session.set({ panelSession: session });
+}
+
+async function clearPanelSession(expectedVersion) {
+  const currentSession = await getPanelSession();
+  const clearVersion = Number(expectedVersion || 0);
+  const currentVersion = Number(currentSession?.version || 0);
+
+  if (currentSession && clearVersion && clearVersion < currentVersion) {
+    return;
+  }
+
+  await chrome.storage.session.set({ panelSession: null });
 }
 
 // Open side panel when extension icon is clicked
@@ -48,9 +107,22 @@ async function handleMessage(message, sender) {
       // Query content script directly for real-time response (not from storage)
       return await getResponseFromContentScript(message.aiType);
 
+    case 'PANEL_STATE_GET':
+      return { success: true, session: await getPanelSession() };
+
+    case 'PANEL_STATE_SET':
+      await setPanelSession(message.session);
+      return { success: true };
+
+    case 'PANEL_STATE_CLEAR':
+      await clearPanelSession(message.version);
+      return { success: true };
+
     case 'RESPONSE_CAPTURED':
       // Content script captured a response
-      await setStoredResponse(message.aiType, message.content);
+      await setStoredResponse(message.aiType, message.content, {
+        url: sender.tab?.url
+      });
       // Forward to side panel (include content for discussion mode)
       notifySidePanel('RESPONSE_CAPTURED', { aiType: message.aiType, content: message.content });
       return { success: true };
@@ -74,7 +146,7 @@ async function getResponseFromContentScript(aiType) {
     if (!tab) {
       // Fallback to stored response if tab not found
       const responses = await getStoredResponses();
-      return { content: responses[aiType], streamingActive: false, captureState: 'unknown' };
+      return normalizeStoredResponse(responses[aiType], { fromStorage: true });
     }
 
     // Query content script for real-time DOM content
@@ -85,13 +157,16 @@ async function getResponseFromContentScript(aiType) {
     return {
       content: response?.content || null,
       streamingActive: Boolean(response?.streamingActive),
-      captureState: response?.captureState || 'unknown'
+      captureState: response?.captureState || 'unknown',
+      updatedAt: response?.updatedAt,
+      url: tab.url,
+      fromStorage: false
     };
   } catch (err) {
     // Fallback to stored response on error
     console.log('[AI Panel] Failed to get response from content script:', err.message);
     const responses = await getStoredResponses();
-    return { content: responses[aiType], streamingActive: false, captureState: 'unknown' };
+    return normalizeStoredResponse(responses[aiType], { fromStorage: true });
   }
 }
 

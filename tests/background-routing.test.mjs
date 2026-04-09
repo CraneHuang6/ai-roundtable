@@ -128,7 +128,10 @@ function loadBackground(sessionState = {}, options = {}) {
     getStoredResponses,
     getResponseFromContentScript,
     sendMessageToAI,
-    handleMessage
+    handleMessage,
+    getPanelSession: typeof getPanelSession === 'function' ? getPanelSession : undefined,
+    setPanelSession: typeof setPanelSession === 'function' ? setPanelSession : undefined,
+    clearPanelSession: typeof clearPanelSession === 'function' ? clearPanelSession : undefined
   };
   `;
 
@@ -204,6 +207,85 @@ test('background treats missing provider completion metadata as unknown instead 
   assert.equal(response.content, 'Kimi 第一段');
   assert.equal(response.streamingActive, false);
   assert.equal(response.captureState, 'unknown');
+});
+
+test('background stores and clears panel session snapshots', async () => {
+  const api = loadBackground();
+
+  assert.equal(typeof api.getPanelSession, 'function');
+  assert.equal(typeof api.setPanelSession, 'function');
+  assert.equal(typeof api.clearPanelSession, 'function');
+
+  await api.setPanelSession({
+    mode: 'discussion',
+    messageDraft: '请继续当前讨论',
+    normalTargets: { claude: true, chatgpt: false }
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await api.getPanelSession())), {
+    mode: 'discussion',
+    messageDraft: '请继续当前讨论',
+    normalTargets: { claude: true, chatgpt: false }
+  });
+
+  await api.clearPanelSession();
+  assert.equal(await api.getPanelSession(), null);
+});
+
+test('background returns stored response metadata when realtime lookup falls back to session storage', async () => {
+  const api = loadBackground({
+    latestResponses: {
+      claude: {
+        content: 'Claude 在面板关闭期间生成的回复',
+        updatedAt: 1712620800000,
+        streamingActive: false,
+        captureState: 'complete',
+        url: 'https://claude.ai/chat/abc'
+      },
+      chatgpt: null,
+      gemini: null,
+      doubao: null,
+      qianwen: null,
+      kimi: null
+    }
+  });
+
+  const response = await api.getResponseFromContentScript('claude');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), {
+    content: 'Claude 在面板关闭期间生成的回复',
+    streamingActive: false,
+    captureState: 'complete',
+    updatedAt: 1712620800000,
+    url: 'https://claude.ai/chat/abc',
+    fromStorage: true
+  });
+});
+
+test('background ignores stale panel session versions', async () => {
+  const api = loadBackground();
+
+  await api.setPanelSession({ version: 2, mode: 'discussion', messageDraft: '新的快照' });
+  await api.setPanelSession({ version: 1, mode: 'normal', messageDraft: '旧的快照' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await api.getPanelSession())), {
+    version: 2,
+    mode: 'discussion',
+    messageDraft: '新的快照'
+  });
+});
+
+test('background does not let a stale clear wipe a newer panel session', async () => {
+  const api = loadBackground();
+
+  await api.setPanelSession({ version: 3, mode: 'discussion', messageDraft: '保留的新快照' });
+  await api.clearPanelSession(2);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await api.getPanelSession())), {
+    version: 3,
+    mode: 'discussion',
+    messageDraft: '保留的新快照'
+  });
 });
 
 test('background falls back to debugger-driven qianwen input when content-script sendMessage fails', async () => {

@@ -265,6 +265,8 @@ function loadPanel(options = {}) {
     }
   };
 
+  const sessionState = structuredClone(options.sessionState ?? {});
+
   const chrome = {
     runtime: {
       onMessage: {
@@ -277,17 +279,56 @@ function loadPanel(options = {}) {
 
         if (message.type === 'GET_RESPONSE') {
           const latestResponse = latestResponses.get(message.aiType) ?? null;
+          if (Array.isArray(latestResponse)) {
+            const next = latestResponse.length > 1 ? latestResponse.shift() : latestResponse[0] ?? null;
+            if (next && typeof next === 'object' && !Array.isArray(next)) {
+              callback?.({
+                success: true,
+                content: next.content ?? null,
+                streamingActive: Boolean(next.streamingActive),
+                captureState: next.captureState ?? 'complete',
+                updatedAt: next.updatedAt,
+                url: next.url,
+                fromStorage: Boolean(next.fromStorage)
+              });
+              return;
+            }
+
+            callback?.({ success: true, content: next, streamingActive: false, captureState: 'complete' });
+            return;
+          }
+
           if (latestResponse && typeof latestResponse === 'object' && !Array.isArray(latestResponse)) {
             callback?.({
               success: true,
               content: latestResponse.content ?? null,
               streamingActive: Boolean(latestResponse.streamingActive),
-              captureState: latestResponse.captureState ?? 'complete'
+              captureState: latestResponse.captureState ?? 'complete',
+              updatedAt: latestResponse.updatedAt,
+              url: latestResponse.url,
+              fromStorage: Boolean(latestResponse.fromStorage)
             });
             return;
           }
 
           callback?.({ success: true, content: latestResponse, streamingActive: false, captureState: 'complete' });
+          return;
+        }
+
+        if (message.type === 'PANEL_STATE_GET') {
+          callback?.({ success: true, session: sessionState.panelSession ?? null });
+          return;
+        }
+
+        if (message.type === 'PANEL_STATE_SET') {
+          sessionState.panelSession = message.session;
+          callback?.({ success: true });
+          return;
+        }
+
+        if (message.type === 'PANEL_STATE_CLEAR') {
+          delete sessionState.panelSession;
+          callback?.({ success: true });
           return;
         }
 
@@ -337,7 +378,9 @@ function loadPanel(options = {}) {
     handleMutualReview,
     generateSummary,
     showSummary,
-    getProviderLabel
+    getProviderLabel,
+    restorePanelState: typeof restorePanelState === 'function' ? restorePanelState : undefined,
+    persistPanelState: typeof persistPanelState === 'function' ? persistPanelState : undefined
   };
   `;
 
@@ -372,7 +415,8 @@ function loadPanel(options = {}) {
     setLatestResponses: (responses) => {
       latestResponses.clear();
       Object.entries(responses).forEach(([ai, content]) => latestResponses.set(ai, content));
-    }
+    },
+    getSessionState: () => structuredClone(sessionState)
   };
 
   loadedPanels.add(panel);
@@ -393,6 +437,117 @@ test('panel test harness can dispose active discussion timers after each test', 
 
   assert.equal(panel.getActiveIntervalCount(), 0);
   assert.equal(panel.getActiveTimeoutCount(), 0);
+});
+
+test('discussion mode restores current round after reopening the side panel', async () => {
+  const panel = loadPanel({
+    sessionState: {
+      panelSession: {
+        mode: 'discussion',
+        discussionState: {
+          active: true,
+          topic: '恢复中的讨论主题',
+          participants: ['chatgpt', 'claude'],
+          currentRound: 2,
+          history: [
+            { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第 1 轮' },
+            { round: 1, ai: 'claude', type: 'initial', content: 'Claude 第 1 轮' }
+          ],
+          roundType: 'cross-eval',
+          pendingResponses: ['chatgpt']
+        },
+        discussionPolling: {
+          pending: ['chatgpt'],
+          baselines: [['chatgpt', 'ChatGPT 第 1 轮']],
+          state: [['chatgpt', { lastObserved: 'ChatGPT 第 1 轮', stableCount: 0 }]]
+        }
+      }
+    }
+  });
+
+  assert.equal(typeof panel.api.restorePanelState, 'function');
+  await panel.api.restorePanelState();
+
+  const state = panel.api.getDiscussionState();
+
+  assert.equal(state.active, true);
+  assert.equal(state.currentRound, 2);
+  assert.deepEqual(Array.from(state.pendingResponses), ['chatgpt']);
+  assert.equal(panel.getElementById('discussion-topic').value, '恢复中的讨论主题');
+  assert.match(panel.getElementById('round-badge').textContent, /第 2 轮/);
+});
+
+test('discussion mode restores completed summary view after reopening the side panel', async () => {
+  const panel = loadPanel({
+    sessionState: {
+      panelSession: {
+        mode: 'discussion',
+        discussionState: {
+          active: true,
+          topic: '总结恢复主题',
+          participants: ['chatgpt', 'claude'],
+          currentRound: 2,
+          history: [
+            { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第 1 轮' },
+            { round: 1, ai: 'claude', type: 'initial', content: 'Claude 第 1 轮' },
+            { round: 2, ai: 'chatgpt', type: 'summary', content: 'ChatGPT 总结' },
+            { round: 2, ai: 'claude', type: 'summary', content: 'Claude 总结' }
+          ],
+          roundType: 'summary',
+          pendingResponses: []
+        },
+        discussionPolling: {
+          pending: [],
+          baselines: [],
+          state: []
+        }
+      }
+    }
+  });
+
+  await panel.api.restorePanelState();
+
+  const summaryHtml = panel.getElementById('summary-content').innerHTML;
+  assert.match(summaryHtml, /ChatGPT 的总结：/);
+  assert.match(summaryHtml, /Claude 的总结：/);
+  assert.ok(!panel.getElementById('discussion-summary').className.includes('hidden'));
+  assert.ok(panel.getElementById('discussion-active').className.includes('hidden'));
+});
+
+test('discussion mode restores summary-in-flight state and finalizes after reopen', async () => {
+  const panel = loadPanel({
+    sessionState: {
+      panelSession: {
+        mode: 'discussion',
+        discussionState: {
+          active: true,
+          topic: '总结恢复进行中主题',
+          participants: ['chatgpt', 'claude'],
+          currentRound: 2,
+          history: [
+            { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第 1 轮' },
+            { round: 1, ai: 'claude', type: 'initial', content: 'Claude 第 1 轮' },
+            { round: 2, ai: 'chatgpt', type: 'summary', content: 'ChatGPT 总结第一版' },
+            { round: 2, ai: 'claude', type: 'summary', content: 'Claude 总结第一版' }
+          ],
+          roundType: 'summary',
+          pendingResponses: []
+        },
+        discussionPolling: {
+          pending: [],
+          baselines: [],
+          state: []
+        }
+      }
+    }
+  });
+
+  await panel.api.restorePanelState();
+
+  assert.ok(panel.getElementById('discussion-active').className.includes('hidden'));
+  assert.ok(!panel.getElementById('discussion-summary').className.includes('hidden'));
+  assert.equal(panel.api.getDiscussionState().active, false);
+  assert.equal(panel.getActiveIntervalCount(), 0);
 });
 
 test('discussion mode keeps the latest fuller capture for the same AI in the same round', () => {
@@ -492,6 +647,52 @@ test('discussion mode can complete a round by polling pending responses when pus
   assert.equal(state.history.find((entry) => entry.ai === 'chatgpt')?.content, 'ChatGPT 后台标签页完整回复');
   assert.equal(state.history.find((entry) => entry.ai === 'claude')?.content, 'Claude 后台标签页完整回复');
   assert.match(panel.getElementById('discussion-status').textContent, /第 1 轮完成/);
+});
+
+test('discussion mode auto-resumes the current round when a participant replies manually after reopening the panel', async () => {
+  const panel = loadPanel({
+    sessionState: {
+      panelSession: {
+        mode: 'discussion',
+        discussionState: {
+          active: true,
+          topic: '手动补发后应继续当前轮',
+          participants: ['chatgpt', 'claude'],
+          currentRound: 1,
+          history: [
+            { round: 1, ai: 'claude', type: 'initial', content: 'Claude 已经回复' }
+          ],
+          roundType: 'initial',
+          pendingResponses: ['chatgpt']
+        },
+        discussionPolling: {
+          pending: ['chatgpt'],
+          baselines: [['chatgpt', '旧的 ChatGPT 回复']],
+          state: [['chatgpt', { lastObserved: '旧的 ChatGPT 回复', stableCount: 0 }]]
+        }
+      }
+    }
+  });
+
+  panel.setLatestResponses({
+    chatgpt: [
+      { content: '旧的 ChatGPT 回复', streamingActive: false, captureState: 'complete', updatedAt: 100 },
+      { content: '用户手动补发后的 ChatGPT 完整回复', streamingActive: false, captureState: 'complete', updatedAt: 200 },
+      { content: '用户手动补发后的 ChatGPT 完整回复', streamingActive: false, captureState: 'complete', updatedAt: 200 }
+    ]
+  });
+
+  await panel.api.restorePanelState();
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+
+  const state = panel.api.getDiscussionState();
+
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 1 && entry.ai === 'chatgpt')?.content,
+    '用户手动补发后的 ChatGPT 完整回复'
+  );
+  assert.equal(panel.getElementById('next-round-btn').disabled, false);
 });
 
 test('discussion mode does not complete a round when polling only sees baseline responses', async () => {

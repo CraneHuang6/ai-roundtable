@@ -105,6 +105,95 @@ const discussionPollingController = createPollingController();
 
 const LONG_TEXT_THRESHOLD = 240;
 let longTextIdCounter = 0;
+let currentMode = 'normal';
+let panelSessionVersion = 0;
+
+function serializeMap(map) {
+  return Array.from(map.entries());
+}
+
+function deserializeMap(entries = []) {
+  return new Map(entries);
+}
+
+function serializeSet(set) {
+  return Array.from(set.values());
+}
+
+function deserializeSet(values = []) {
+  return new Set(values);
+}
+
+function getCheckedTargets() {
+  return Object.fromEntries(AI_TYPES.map((ai) => [ai, Boolean(document.getElementById(`target-${ai}`)?.checked)]));
+}
+
+function applyCheckedTargets(targets = {}) {
+  AI_TYPES.forEach((ai) => {
+    const checkbox = document.getElementById(`target-${ai}`);
+    if (checkbox) {
+      checkbox.checked = Boolean(targets[ai]);
+    }
+  });
+}
+
+function serializePollingController(controller) {
+  return {
+    pending: serializeSet(controller.pending),
+    baselines: serializeMap(controller.baselines),
+    state: serializeMap(controller.state)
+  };
+}
+
+function hydratePollingController(controller, snapshot = {}) {
+  controller.pending = deserializeSet(snapshot.pending || []);
+  controller.baselines = deserializeMap(snapshot.baselines || []);
+  controller.state = deserializeMap(snapshot.state || []);
+}
+
+function serializeDiscussionState() {
+  return {
+    active: discussionState.active,
+    topic: discussionState.topic,
+    participants: [...discussionState.participants],
+    currentRound: discussionState.currentRound,
+    history: [...discussionState.history],
+    roundType: discussionState.roundType,
+    pendingResponses: serializeSet(discussionState.pendingResponses)
+  };
+}
+
+function hydrateDiscussionState(snapshot = {}) {
+  discussionState = {
+    active: Boolean(snapshot.active),
+    topic: snapshot.topic || '',
+    participants: [...(snapshot.participants || [])],
+    currentRound: snapshot.currentRound || 0,
+    history: [...(snapshot.history || [])],
+    pendingResponses: deserializeSet(snapshot.pendingResponses || []),
+    roundType: snapshot.roundType || null
+  };
+}
+
+async function getStoredPanelSession() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'PANEL_STATE_GET' }, (response) => {
+      resolve(response?.session || null);
+    });
+  });
+}
+
+async function setStoredPanelSession(session) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'PANEL_STATE_SET', session }, () => resolve());
+  });
+}
+
+async function clearStoredPanelSession(version) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'PANEL_STATE_CLEAR', version }, () => resolve());
+  });
+}
 
 function escapeLongText(text) {
   return escapeHtml(String(text ?? '')).replace(/\n/g, '<br>');
@@ -164,16 +253,27 @@ function handleLongTextToggle(event) {
 }
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
-  checkConnectedTabs();
+document.addEventListener('DOMContentLoaded', async () => {
   setupEventListeners();
   setupDiscussionMode();
   setupFileUpload();
+  await restorePanelState();
+  checkConnectedTabs();
 });
 
 function setupEventListeners() {
   sendBtn.addEventListener('click', handleSend);
   document.addEventListener('click', handleLongTextToggle);
+  messageInput.addEventListener('input', () => {
+    schedulePersistPanelState();
+  });
+
+  AI_TYPES.forEach((ai) => {
+    const checkbox = document.getElementById(`target-${ai}`);
+    checkbox?.addEventListener('change', () => {
+      schedulePersistPanelState();
+    });
+  });
 
   // Enter to send, Shift+Enter for new line (like ChatGPT)
   // But ignore Enter during IME composition (e.g., Chinese input)
@@ -506,12 +606,17 @@ function syncPollingControllerAliases() {
   discussionPollingState = discussionPollingController.state;
 }
 
+function schedulePersistPanelState() {
+  persistPanelState();
+}
+
 function clearResponsePolling(controller) {
   if (controller.timer) {
     clearInterval(controller.timer);
     controller.timer = null;
   }
   syncPollingControllerAliases();
+  schedulePersistPanelState();
 }
 
 async function captureResponseBaselines(controller, aiTypes, options = {}) {
@@ -530,6 +635,7 @@ async function captureResponseBaselines(controller, aiTypes, options = {}) {
   }));
 
   syncPollingControllerAliases();
+  schedulePersistPanelState();
 }
 
 function startResponsePolling(controller, options) {
@@ -552,9 +658,11 @@ function startResponsePolling(controller, options) {
     }
 
     syncPollingControllerAliases();
+  schedulePersistPanelState();
   }, options.intervalMs ?? 500);
 
   syncPollingControllerAliases();
+  schedulePersistPanelState();
 }
 
 function shouldAcceptPolledNormalResponse(aiType, normalizedResponse, _controller, responseMeta = {}) {
@@ -604,6 +712,7 @@ function handleNormalResponse(aiType, content) {
   normalPollingController.baselines.set(aiType, normalizedResponse);
   normalPollingController.pending.delete(aiType);
   syncPollingControllerAliases();
+  schedulePersistPanelState();
   log(`${aiType}: Response captured`, 'success');
 
   if (normalPollingController.pending.size === 0) {
@@ -613,6 +722,150 @@ function handleNormalResponse(aiType, content) {
 
 function clearNormalResponsePolling() {
   clearResponsePolling(normalPollingController);
+  persistPanelState();
+}
+
+async function persistPanelState() {
+  const hasNormalPending = normalPollingController.pending.size > 0;
+  const hasDiscussionPending = discussionPollingController.pending.size > 0;
+  const hasDiscussionState = discussionState.active || discussionState.history.length > 0 || discussionState.currentRound > 0;
+
+  if (!hasNormalPending && !hasDiscussionPending && !hasDiscussionState && currentMode === 'normal' && !messageInput.value.trim()) {
+    await clearStoredPanelSession(panelSessionVersion);
+    return;
+  }
+
+  panelSessionVersion += 1;
+
+  await setStoredPanelSession({
+    version: panelSessionVersion,
+    mode: currentMode,
+    messageDraft: messageInput.value,
+    normalTargets: getCheckedTargets(),
+    normalPolling: serializePollingController(normalPollingController),
+    discussionState: serializeDiscussionState(),
+    discussionPolling: serializePollingController(discussionPollingController)
+  });
+}
+
+function applyDiscussionUIFromState() {
+  const setupEl = document.getElementById('discussion-setup');
+  const activeEl = document.getElementById('discussion-active');
+  const summaryEl = document.getElementById('discussion-summary');
+  const topicInput = document.getElementById('discussion-topic');
+  const roundBadge = document.getElementById('round-badge');
+  const participantsBadge = document.getElementById('participants-badge');
+  const nextRoundBtn = document.getElementById('next-round-btn');
+  const summaryBtn = document.getElementById('generate-summary-btn');
+
+  topicInput.value = discussionState.topic || '';
+
+  if (discussionState.roundType === 'summary' && discussionState.pendingResponses.size === 0) {
+    const summaryEntries = discussionState.participants.map((ai) => {
+      return discussionState.history.find((entry) => entry.ai === ai && entry.type === 'summary')?.content || '';
+    });
+
+    if (summaryEntries.some(Boolean)) {
+      showSummary(...summaryEntries);
+      return;
+    }
+  }
+
+  if (discussionState.active) {
+    setupEl.classList.add('hidden');
+    activeEl.classList.remove('hidden');
+    summaryEl.classList.add('hidden');
+    roundBadge.textContent = `第 ${discussionState.currentRound} 轮`;
+    participantsBadge.textContent = discussionState.participants.map(getProviderLabel).join(' · ');
+    document.getElementById('topic-display').innerHTML = renderLongTextHTML(discussionState.topic || '');
+
+    if (discussionState.pendingResponses.size > 0) {
+      nextRoundBtn.disabled = true;
+      summaryBtn.disabled = true;
+      updateDiscussionStatus('waiting', `等待 ${Array.from(discussionState.pendingResponses).map(getProviderLabel).join('、')}...`);
+    } else {
+      nextRoundBtn.disabled = false;
+      summaryBtn.disabled = false;
+      updateDiscussionStatus('ready', `第 ${discussionState.currentRound} 轮完成，可以进入下一轮`);
+    }
+    return;
+  }
+
+  if (discussionState.history.length > 0 && discussionState.roundType === 'summary') {
+    setupEl.classList.add('hidden');
+    activeEl.classList.add('hidden');
+    summaryEl.classList.remove('hidden');
+    return;
+  }
+
+  setupEl.classList.remove('hidden');
+  activeEl.classList.add('hidden');
+  summaryEl.classList.add('hidden');
+}
+
+async function reconcilePendingResponses(controller, pendingAiTypes, shouldAccept, onAccept) {
+  const pending = Array.from(pendingAiTypes);
+  for (const ai of pending) {
+    const response = await getLatestResponse(ai);
+    const normalizedResponse = response?.content?.trim() || '';
+    if (!shouldAccept(ai, normalizedResponse, controller, response)) {
+      continue;
+    }
+    onAccept(ai, normalizedResponse, controller, response);
+  }
+}
+
+async function resumePendingPolling() {
+  if (currentMode === 'discussion' && discussionState.active && discussionState.pendingResponses.size > 0) {
+    await reconcilePendingResponses(
+      discussionPollingController,
+      discussionState.pendingResponses,
+      (ai, normalizedResponse, controller, responseMeta) =>
+        shouldAcceptPolledDiscussionResponse(ai, normalizedResponse, controller, responseMeta),
+      (ai, normalizedResponse) => {
+        handleDiscussionResponse(ai, normalizedResponse);
+      }
+    );
+    if (discussionState.pendingResponses.size > 0) {
+      startDiscussionResponsePolling();
+    }
+    return;
+  }
+
+  if (normalPollingController.pending.size > 0) {
+    await reconcilePendingResponses(
+      normalPollingController,
+      normalPollingController.pending,
+      (ai, normalizedResponse, controller, responseMeta) =>
+        shouldAcceptPolledNormalResponse(ai, normalizedResponse, controller, responseMeta),
+      (ai, normalizedResponse) => {
+        handleNormalResponse(ai, normalizedResponse);
+      }
+    );
+    if (normalPollingController.pending.size > 0) {
+      startNormalResponsePolling();
+    }
+  }
+}
+
+async function restorePanelState() {
+  const session = await getStoredPanelSession();
+  if (!session) {
+    return;
+  }
+
+  panelSessionVersion = Number(session.version || 0);
+  currentMode = session.mode === 'discussion' ? 'discussion' : 'normal';
+  messageInput.value = session.messageDraft || '';
+  applyCheckedTargets(session.normalTargets || {});
+  hydratePollingController(normalPollingController, session.normalPolling || {});
+  hydrateDiscussionState(session.discussionState || {});
+  hydratePollingController(discussionPollingController, session.discussionPolling || {});
+  syncPollingControllerAliases();
+  schedulePersistPanelState();
+  switchMode(currentMode);
+  applyDiscussionUIFromState();
+  await resumePendingPolling();
 }
 
 async function captureNormalBaselines(aiTypes) {
@@ -708,7 +961,10 @@ async function getLatestResponse(aiType) {
         resolve({
           content: response?.content || null,
           streamingActive: Boolean(response?.streamingActive),
-          captureState: response?.captureState || 'complete'
+          captureState: response?.captureState || 'complete',
+          updatedAt: response?.updatedAt,
+          url: response?.url,
+          fromStorage: Boolean(response?.fromStorage)
         });
       }
     );
@@ -770,7 +1026,10 @@ function setupDiscussionMode() {
 
   // Participant selection validation
   document.querySelectorAll('input[name="participant"]').forEach(checkbox => {
-    checkbox.addEventListener('change', validateParticipants);
+    checkbox.addEventListener('change', () => {
+      validateParticipants();
+      schedulePersistPanelState();
+    });
   });
 }
 
@@ -779,6 +1038,8 @@ function switchMode(mode) {
   const discussionMode = document.getElementById('discussion-mode');
   const normalBtn = document.getElementById('mode-normal');
   const discussionBtn = document.getElementById('mode-discussion');
+
+  currentMode = mode;
 
   if (mode === 'normal') {
     normalMode.classList.remove('hidden');
@@ -791,6 +1052,8 @@ function switchMode(mode) {
     normalBtn.classList.remove('active');
     discussionBtn.classList.add('active');
   }
+
+  persistPanelState();
 }
 
 function validateParticipants() {
@@ -800,6 +1063,7 @@ function validateParticipants() {
 }
 
 async function startDiscussion() {
+  currentMode = 'discussion';
   const topic = document.getElementById('discussion-topic').value.trim();
   if (!topic) {
     log('请输入讨论主题', 'error');
@@ -903,6 +1167,7 @@ function handleDiscussionResponse(aiType, content) {
     existingEntry.content = normalizedResponse;
     discussionPollingController.baselines.set(aiType, normalizedResponse);
     syncPollingControllerAliases();
+    schedulePersistPanelState();
     log(`讨论: ${aiType} 回复已更新 (第 ${discussionState.currentRound} 轮)`, 'success');
     return;
   }
@@ -920,6 +1185,7 @@ function handleDiscussionResponse(aiType, content) {
 
   // Remove from pending
   discussionState.pendingResponses.delete(aiType);
+  schedulePersistPanelState();
 
   log(`讨论: ${aiType} 已回复 (第 ${discussionState.currentRound} 轮)`, 'success');
 
@@ -940,6 +1206,7 @@ function onRoundComplete() {
   // Enable next round button
   document.getElementById('next-round-btn').disabled = false;
   document.getElementById('generate-summary-btn').disabled = false;
+  schedulePersistPanelState();
 }
 
 async function nextRound() {
@@ -1056,6 +1323,7 @@ async function handleInterject() {
   // Clear input
   input.value = '';
   btn.disabled = false;
+  schedulePersistPanelState();
 }
 
 async function generateSummary() {
@@ -1138,6 +1406,8 @@ ${historyText}`;
 }
 
 function showSummary(...summaries) {
+  currentMode = 'discussion';
+  clearDiscussionPolling();
   document.getElementById('discussion-active').classList.add('hidden');
   document.getElementById('discussion-summary').classList.remove('hidden');
 
@@ -1184,6 +1454,7 @@ function showSummary(...summaries) {
   document.getElementById('summary-content').innerHTML = html;
   discussionState.active = false;
   log('讨论总结已生成', 'success');
+  schedulePersistPanelState();
 }
 
 function endDiscussion() {
@@ -1212,14 +1483,17 @@ function resetDiscussion() {
   document.getElementById('discussion-topic').value = '';
   document.getElementById('next-round-btn').disabled = true;
   document.getElementById('generate-summary-btn').disabled = true;
+  currentMode = 'normal';
 
   log('讨论已结束');
+  clearStoredPanelSession();
 }
 
 function updateDiscussionStatus(state, text) {
   const statusEl = document.getElementById('discussion-status');
   statusEl.textContent = text;
   statusEl.className = 'discussion-status ' + state;
+  schedulePersistPanelState();
 }
 
 function clearDiscussionPolling() {

@@ -258,6 +258,8 @@ function loadPanel(responseMap = {}, options = {}) {
     }
   };
 
+  const sessionState = structuredClone(options.sessionState ?? {});
+
   const chrome = {
     runtime: {
       onMessage: {
@@ -273,7 +275,10 @@ function loadPanel(responseMap = {}, options = {}) {
               callback?.({
                 content: next.content ?? null,
                 streamingActive: Boolean(next.streamingActive),
-                captureState: next.captureState ?? 'complete'
+                captureState: next.captureState ?? 'complete',
+                updatedAt: next.updatedAt,
+                url: next.url,
+                fromStorage: Boolean(next.fromStorage)
               });
               return;
             }
@@ -284,11 +289,32 @@ function loadPanel(responseMap = {}, options = {}) {
             callback?.({
               content: entry.content ?? null,
               streamingActive: Boolean(entry.streamingActive),
-              captureState: entry.captureState ?? 'complete'
+              captureState: entry.captureState ?? 'complete',
+              updatedAt: entry.updatedAt,
+              url: entry.url,
+              fromStorage: Boolean(entry.fromStorage)
             });
             return;
           }
+          if (message.type === 'PANEL_STATE_GET') {
+            callback?.({ success: true, session: sessionState.panelSession ?? null });
+            return;
+          }
           callback?.({ content: entry || null, streamingActive: false, captureState: 'complete' });
+          return;
+        }
+        if (message.type === 'PANEL_STATE_GET') {
+          callback?.({ success: true, session: sessionState.panelSession ?? null });
+          return;
+        }
+        if (message.type === 'PANEL_STATE_SET') {
+          sessionState.panelSession = message.session;
+          callback?.({ success: true });
+          return;
+        }
+        if (message.type === 'PANEL_STATE_CLEAR') {
+          delete sessionState.panelSession;
+          callback?.({ success: true });
           return;
         }
         callback?.({ success: true, content: null });
@@ -331,7 +357,10 @@ function loadPanel(responseMap = {}, options = {}) {
     handleMutualReview,
     log,
     parseMessage,
-    getProviderLabel
+    getProviderLabel,
+    restorePanelState: typeof restorePanelState === 'function' ? restorePanelState : undefined,
+    persistPanelState: typeof persistPanelState === 'function' ? persistPanelState : undefined,
+    getNormalPollingController: () => normalPollingController
   };
   `;
 
@@ -346,6 +375,7 @@ function loadPanel(responseMap = {}, options = {}) {
     getSentMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE'),
     getActiveIntervalCount: () => activeIntervals.size,
     getActiveTimeoutCount: () => activeTimeouts.size,
+    getSessionState: () => structuredClone(sessionState),
     dispose() {
       for (const handle of Array.from(activeIntervals)) {
         trackedClearInterval(handle);
@@ -502,6 +532,77 @@ test('normal mode keeps ChatGPT pending when a truncated long reply is still unk
     pullMessages.length >= 6,
     `expected normal mode to keep polling through unknown plateau and fuller tail stabilization, got ${pullMessages.length}`
   );
+});
+
+test('normal mode restores panel state and resumes polling after reopening the side panel', async () => {
+  const storedSession = {
+    panelSession: {
+      mode: 'normal',
+      messageDraft: '请继续追问这个问题',
+      normalTargets: { claude: false, chatgpt: true, gemini: false, doubao: false, qianwen: false, kimi: false },
+      normalPolling: {
+        pending: ['chatgpt'],
+        baselines: [['chatgpt', 'ChatGPT 的旧回复']],
+        state: [['chatgpt', { lastObserved: 'ChatGPT 的旧回复', stableCount: 0 }]]
+      }
+    }
+  };
+  const panel = loadPanel({
+    chatgpt: [
+      { content: 'ChatGPT 的旧回复', streamingActive: false, captureState: 'complete' },
+      { content: 'ChatGPT 面板重开后的新回复', streamingActive: false, captureState: 'complete' },
+      { content: 'ChatGPT 面板重开后的新回复', streamingActive: false, captureState: 'complete' }
+    ]
+  }, { sessionState: storedSession });
+
+  assert.equal(typeof panel.api.restorePanelState, 'function');
+  await panel.api.restorePanelState();
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  const runtimeMessages = panel.getRuntimeMessages();
+  const pullMessages = runtimeMessages.filter((message) => message.type === 'GET_RESPONSE' && message.aiType === 'chatgpt');
+
+  assert.equal(panel.getElementById('message-input').value, '请继续追问这个问题');
+  assert.equal(panel.getElementById('target-chatgpt').checked, true);
+  assert.ok(pullMessages.length >= 2, `expected restored normal mode to resume polling, got ${pullMessages.length}`);
+});
+
+test('normal mode persists active state for later restore', async () => {
+  const panel = loadPanel({
+    claude: 'Claude 的旧回复'
+  });
+
+  panel.getElementById('message-input').value = '请继续';
+  panel.getElementById('target-claude').checked = true;
+
+  await panel.api.handleSend();
+  await panel.api.persistPanelState();
+
+  assert.deepEqual(panel.getSessionState().panelSession, {
+    version: 4,
+    mode: 'normal',
+    messageDraft: '',
+    normalTargets: { claude: true, chatgpt: false, gemini: false, doubao: false, qianwen: false, kimi: false },
+    normalPolling: {
+      pending: ['claude'],
+      baselines: [['claude', 'Claude 的旧回复']],
+      state: []
+    },
+    discussionState: {
+      active: false,
+      topic: '',
+      participants: [],
+      currentRound: 0,
+      history: [],
+      roundType: null,
+      pendingResponses: []
+    },
+    discussionPolling: {
+      pending: [],
+      baselines: [],
+      state: []
+    }
+  });
 });
 
 test('panel polling logic uses shared helper for normal and discussion flows', () => {
