@@ -570,3 +570,61 @@ test('background accepts kimi homepage new-chat tab when no chat route exists ye
 
   assert.equal(response.success, true, JSON.stringify(response));
 });
+
+test('background falls back to debugger when kimi verification only sees stale completed content', async () => {
+  const debuggerCalls = [];
+  const debuggerTargets = [];
+  let messageCount = 0;
+  const runtimeResults = [
+    { x: 220, y: 680 },
+    {
+      inputText: 'reply with KIMI only',
+      sendDisabled: false,
+      stopVisible: false,
+      userTurnCount: 1,
+      assistantTurnCount: 1,
+      lastAssistantText: '旧回复'
+    },
+    {
+      inputText: '',
+      sendDisabled: true,
+      stopVisible: true,
+      userTurnCount: 2,
+      assistantTurnCount: 1,
+      lastAssistantText: '旧回复'
+    }
+  ];
+
+  const api = loadBackground({}, {
+    tabs: [
+      { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
+    ],
+    async sendMessage(tabId, payload) {
+      if (payload.type === 'GET_LATEST_RESPONSE') {
+        return { streamingActive: false, captureState: 'complete', content: '旧回复' };
+      }
+      messageCount += 1;
+      return { success: true };
+    },
+    attachDebugger(target, version) {
+      debuggerTargets.push({ type: 'attach', target, version });
+    },
+    sendDebuggerCommand(target, method, params) {
+      debuggerCalls.push({ target, method, params });
+      if (method === 'Runtime.evaluate') {
+        return { result: { value: runtimeResults.shift() ?? null } };
+      }
+      return {};
+    },
+    detachDebugger(target) {
+      debuggerTargets.push({ type: 'detach', target });
+    }
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(messageCount, 1, JSON.stringify({ response, messageCount, debuggerTargets, debuggerCalls }));
+  assert.equal(response.success, true, JSON.stringify({ response, debuggerTargets, debuggerCalls }));
+  assert.equal(debuggerTargets[0]?.type, 'attach', JSON.stringify({ response, debuggerTargets, debuggerCalls }));
+  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent' && call.params?.key === 'Enter'), true);
+});

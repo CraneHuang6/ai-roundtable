@@ -160,6 +160,8 @@
       throw new Error('Could not find send button');
     }
 
+    const baselineUserMessageCount = getVisibleUserMessageCount();
+
     sendButton.click();
 
     // Wait and verify the message was actually sent — for controlled editors
@@ -168,7 +170,7 @@
     //   1. Input cleared (text left the input field)
     //   2. Streaming started (stop button appeared)
     //   3. New user message appeared in the chat
-    const sent = await verifySendSuccess(inputEl, text, 3000);
+    const sent = await verifySendSuccess(inputEl, text, 3000, baselineUserMessageCount);
     if (!sent) {
       throw new Error('Message was not sent — controlled editor may have rejected the input');
     }
@@ -177,7 +179,7 @@
     return true;
   }
 
-  async function verifySendSuccess(inputEl, text, timeoutMs) {
+  async function verifySendSuccess(inputEl, text, timeoutMs, baselineUserMessageCount) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
       if (isStreamingActive()) {
@@ -193,7 +195,7 @@
         // Input reverted — the editor rejected the DOM-level text injection.
         return false;
       }
-      if (hasNewUserMessage()) {
+      if (hasNewUserMessage(baselineUserMessageCount)) {
         return true;
       }
       await sleep(200);
@@ -201,7 +203,11 @@
     return false;
   }
 
-  function hasNewUserMessage() {
+  function hasNewUserMessage(baselineUserMessageCount = 0) {
+    return getVisibleUserMessageCount() > baselineUserMessageCount;
+  }
+
+  function getVisibleUserMessageCount() {
     const selectors = [
       '[data-testid="kimi-user-message"]',
       '[data-role="user"]',
@@ -212,15 +218,12 @@
     ];
 
     for (const selector of selectors) {
-      const messages = document.querySelectorAll(selector);
+      const messages = Array.from(document.querySelectorAll(selector)).filter(isVisible);
       if (messages.length > 0) {
-        const last = messages[messages.length - 1];
-        if (isVisible(last)) {
-          return true;
-        }
+        return messages.length;
       }
     }
-    return false;
+    return 0;
   }
 
   let lastCapturedContent = '';

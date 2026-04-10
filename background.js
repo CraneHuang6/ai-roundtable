@@ -182,6 +182,15 @@ async function sendMessageToAI(aiType, message) {
 
     let response;
     let usedContentScriptPath = false;
+    let kimiResponseBaseline = null;
+
+    if (aiType === 'kimi') {
+      try {
+        kimiResponseBaseline = await getKimiVerificationState(tab.id);
+      } catch (_err) {
+        kimiResponseBaseline = null;
+      }
+    }
 
     try {
       // Send message to content script
@@ -219,7 +228,7 @@ async function sendMessageToAI(aiType, message) {
     // Only verify when the content-script path was used — the debugger path
     // already has its own send-observation step.
     if (aiType === 'kimi' && usedContentScriptPath && response && response.success === true) {
-      const verified = await verifyKimiContentScriptSend(tab.id);
+      const verified = await verifyKimiContentScriptSend(tab.id, kimiResponseBaseline);
       if (!verified) {
         response = await sendMessageToKimiViaDebugger(tab.id, message);
       }
@@ -238,22 +247,18 @@ async function sendMessageToAI(aiType, message) {
   }
 }
 
-async function verifyKimiContentScriptSend(tabId, maxAttempts = 8) {
+async function verifyKimiContentScriptSend(tabId, baselineState, maxAttempts = 8) {
   // Poll the content script to check if the message was actually accepted.
-  // A successful send should trigger streaming (stop button) or the input
-  // should be cleared with a new response appearing.
+  // A successful send should trigger streaming (stop button) or produce a
+  // newer completed response than the pre-send baseline.
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await sleep(400);
     try {
-      const state = await chrome.tabs.sendMessage(tabId, {
-        type: 'GET_LATEST_RESPONSE'
-      });
+      const state = await getKimiVerificationState(tabId);
       if (state && state.streamingActive) {
         return true;
       }
-      // If captureState is 'complete' and there is new content, the message
-      // likely went through as a very short reply.
-      if (state && state.captureState === 'complete' && state.content) {
+      if (isNewKimiVerificationContent(baselineState, state)) {
         return true;
       }
     } catch (_err) {
@@ -262,6 +267,26 @@ async function verifyKimiContentScriptSend(tabId, maxAttempts = 8) {
     }
   }
   return false;
+}
+
+async function getKimiVerificationState(tabId) {
+  return await chrome.tabs.sendMessage(tabId, {
+    type: 'GET_LATEST_RESPONSE'
+  });
+}
+
+function isNewKimiVerificationContent(baselineState, currentState) {
+  if (!currentState || currentState.captureState !== 'complete') {
+    return false;
+  }
+
+  const currentContent = String(currentState.content || '').trim();
+  if (!currentContent) {
+    return false;
+  }
+
+  const baselineContent = String(baselineState?.content || '').trim();
+  return currentContent !== baselineContent;
 }
 
 async function sendMessageToContentScript(tabId, message) {

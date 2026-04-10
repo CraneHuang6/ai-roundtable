@@ -44,6 +44,7 @@ function loadKimiContent(state, options = {}) {
   const inputTagName = options.inputTagName || 'DIV';
   const exposeInput = options.exposeInput !== false;
   const assistantSelectorMode = options.assistantSelectorMode || 'both';
+  const visibleUserMessageCount = options.visibleUserMessageCount || 0;
 
   const inputState = {
     committedText: '',
@@ -197,6 +198,22 @@ function loadKimiContent(state, options = {}) {
         selector === '.chat-content-item-assistant' ||
         selector === '.segment.segment-assistant' ||
         selector === '.segment-assistant';
+      const userMatch =
+        selector === '[data-testid="kimi-user-message"]' ||
+        selector === '[data-role="user"]' ||
+        selector === '.chat-content-item.chat-content-item-user' ||
+        selector === '.chat-content-item-user' ||
+        selector === '.segment.segment-user' ||
+        selector === '.segment-user';
+
+      if (userMatch) {
+        return Array.from({ length: visibleUserMessageCount }, () => ({
+          offsetParent: {},
+          getClientRects() {
+            return [1];
+          }
+        }));
+      }
 
       const selectorAllowed =
         assistantSelectorMode === 'both'
@@ -354,7 +371,8 @@ function loadKimiContent(state, options = {}) {
     inputEvents,
     execCommands,
     inputEl,
-    sendButton
+    sendButton,
+    state
   };
 }
 
@@ -525,6 +543,28 @@ test('kimi injectMessage throws a clear error when no input field is found', asy
   await assert.rejects(
     () => api.injectMessage('请用中文总结这个问题'),
     /Could not find input field/
+  );
+});
+
+test('kimi injectMessage does not treat existing visible user history as a successful new send', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadKimiContent(state, {
+    keepInputAfterClick: true,
+    startStreamingAfterClick: false,
+    visibleUserMessageCount: 2
+  });
+
+  await assert.rejects(
+    () => api.injectMessage('请只回复：KIMI-HISTORY-FALSE-POSITIVE'),
+    /Message was not sent/
   );
 });
 
