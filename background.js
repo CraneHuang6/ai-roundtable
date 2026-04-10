@@ -181,15 +181,18 @@ async function sendMessageToAI(aiType, message) {
     }
 
     let response;
+    let usedContentScriptPath = false;
 
     try {
       // Send message to content script
       response = await sendMessageToContentScript(tab.id, message);
+      usedContentScriptPath = true;
     } catch (err) {
       if (aiType === 'kimi' && shouldRetryKimiContentScriptSend(err, tab)) {
         const retried = await retryKimiContentScriptSend(tab.id, message);
         if (retried) {
           response = retried;
+          usedContentScriptPath = true;
         } else {
           response = await sendMessageToKimiViaDebugger(tab.id, message);
         }
@@ -210,6 +213,18 @@ async function sendMessageToAI(aiType, message) {
       response = await sendMessageToKimiViaDebugger(tab.id, message);
     }
 
+    // For Kimi: even if content script returned success, verify the message
+    // was actually accepted by the controlled editor.  If the send did not
+    // take effect (no streaming, no new user message), fall back to debugger.
+    // Only verify when the content-script path was used — the debugger path
+    // already has its own send-observation step.
+    if (aiType === 'kimi' && usedContentScriptPath && response && response.success === true) {
+      const verified = await verifyKimiContentScriptSend(tab.id);
+      if (!verified) {
+        response = await sendMessageToKimiViaDebugger(tab.id, message);
+      }
+    }
+
     // Notify side panel
     notifySidePanel('SEND_RESULT', {
       aiType,
@@ -221,6 +236,32 @@ async function sendMessageToAI(aiType, message) {
   } catch (err) {
     return { success: false, error: err.message };
   }
+}
+
+async function verifyKimiContentScriptSend(tabId, maxAttempts = 8) {
+  // Poll the content script to check if the message was actually accepted.
+  // A successful send should trigger streaming (stop button) or the input
+  // should be cleared with a new response appearing.
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await sleep(400);
+    try {
+      const state = await chrome.tabs.sendMessage(tabId, {
+        type: 'GET_LATEST_RESPONSE'
+      });
+      if (state && state.streamingActive) {
+        return true;
+      }
+      // If captureState is 'complete' and there is new content, the message
+      // likely went through as a very short reply.
+      if (state && state.captureState === 'complete' && state.content) {
+        return true;
+      }
+    } catch (_err) {
+      // Content script unreachable — cannot verify, assume failure
+      return false;
+    }
+  }
+  return false;
 }
 
 async function sendMessageToContentScript(tabId, message) {

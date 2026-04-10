@@ -149,7 +149,11 @@
       }
     }
 
-    await sleep(200);
+    // Trigger additional events to help controlled editors recognize the input
+    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await sleep(300);
 
     const sendButton = await waitForSendButton();
     if (!sendButton) {
@@ -157,14 +161,66 @@
     }
 
     sendButton.click();
-    await sleep(200);
 
-    if (!didMessageLeaveInput(inputEl, text) && !isStreamingActive()) {
-      throw new Error('Message was not sent');
+    // Wait and verify the message was actually sent — for controlled editors
+    // like Kimi's, a successful click does not guarantee the message was
+    // accepted.  We check multiple post-click signals:
+    //   1. Input cleared (text left the input field)
+    //   2. Streaming started (stop button appeared)
+    //   3. New user message appeared in the chat
+    const sent = await verifySendSuccess(inputEl, text, 3000);
+    if (!sent) {
+      throw new Error('Message was not sent — controlled editor may have rejected the input');
     }
 
     waitForStreamingComplete();
     return true;
+  }
+
+  async function verifySendSuccess(inputEl, text, timeoutMs) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+      if (isStreamingActive()) {
+        return true;
+      }
+      if (didMessageLeaveInput(inputEl, text)) {
+        // Input cleared — double-check with a short settle window because
+        // controlled editors may briefly clear then revert.
+        await sleep(300);
+        if (didMessageLeaveInput(inputEl, text) || isStreamingActive()) {
+          return true;
+        }
+        // Input reverted — the editor rejected the DOM-level text injection.
+        return false;
+      }
+      if (hasNewUserMessage()) {
+        return true;
+      }
+      await sleep(200);
+    }
+    return false;
+  }
+
+  function hasNewUserMessage() {
+    const selectors = [
+      '[data-testid="kimi-user-message"]',
+      '[data-role="user"]',
+      '.chat-content-item.chat-content-item-user',
+      '.chat-content-item-user',
+      '.segment.segment-user',
+      '.segment-user'
+    ];
+
+    for (const selector of selectors) {
+      const messages = document.querySelectorAll(selector);
+      if (messages.length > 0) {
+        const last = messages[messages.length - 1];
+        if (isVisible(last)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   let lastCapturedContent = '';

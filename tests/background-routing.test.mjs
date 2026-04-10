@@ -375,7 +375,12 @@ test('background prefers content-script kimi send and still chooses chat tab ove
       { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' },
       { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
     ],
-    realtimeResponse: { success: true },
+    async sendMessage(tabId, payload) {
+      if (payload.type === 'GET_LATEST_RESPONSE') {
+        return { streamingActive: true, captureState: 'streaming', content: '' };
+      }
+      return { success: true };
+    },
     attachDebugger(target, version) {
       debuggerTargets.push({ type: 'attach', target, version });
     },
@@ -413,6 +418,9 @@ test('background retries content-script kimi send after tab finishes loading ins
       return currentTab;
     },
     async sendMessage(tabId, payload) {
+      if (payload.type === 'GET_LATEST_RESPONSE') {
+        return { streamingActive: true, captureState: 'streaming', content: '' };
+      }
       sendAttempts += 1;
       if (sendAttempts === 1) {
         assert.equal(tabId, 10);
@@ -488,6 +496,9 @@ test('background falls back to debugger-driven kimi input when content-script se
 
   const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
 
+  // When content script throws, the verifyKimiContentScriptSend step is
+  // skipped (we only verify on success path).  The debugger fallback
+  // handles the send and its own waitForKimiSendObserved.
   assert.equal(response.success, true, JSON.stringify({ response, debuggerCalls, debuggerTargets }));
   assert.equal(debuggerTargets[0].type, 'attach');
   assert.equal(debuggerTargets[0].target.tabId, 10);
@@ -547,7 +558,12 @@ test('background accepts kimi homepage new-chat tab when no chat route exists ye
     tabs: [
       { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' }
     ],
-    realtimeResponse: { success: true }
+    async sendMessage(tabId, payload) {
+      if (payload.type === 'GET_LATEST_RESPONSE') {
+        return { streamingActive: true, captureState: 'streaming', content: '' };
+      }
+      return { success: true };
+    }
   });
 
   const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
