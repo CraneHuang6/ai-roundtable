@@ -181,56 +181,23 @@ async function sendMessageToAI(aiType, message) {
     }
 
     let response;
-    let usedContentScriptPath = false;
-    let kimiResponseBaseline = null;
 
     if (aiType === 'kimi') {
+      response = await sendMessageToKimi(tab, message);
+    } else {
       try {
-        kimiResponseBaseline = await getKimiVerificationState(tab.id);
-      } catch (_err) {
-        kimiResponseBaseline = null;
-      }
-    }
-
-    try {
-      // Send message to content script
-      response = await sendMessageToContentScript(tab.id, message);
-      usedContentScriptPath = true;
-    } catch (err) {
-      if (aiType === 'kimi' && shouldRetryKimiContentScriptSend(err, tab)) {
-        const retried = await retryKimiContentScriptSend(tab.id, message);
-        if (retried) {
-          response = retried;
-          usedContentScriptPath = true;
+        // Send message to content script
+        response = await sendMessageToContentScript(tab.id, message);
+      } catch (err) {
+        if (aiType === 'qianwen') {
+          response = await sendMessageToQianwenViaDebugger(tab.id, message);
         } else {
-          response = await sendMessageToKimiViaDebugger(tab.id, message);
+          throw err;
         }
-      } else if (aiType === 'qianwen') {
-        response = await sendMessageToQianwenViaDebugger(tab.id, message);
-      } else if (aiType === 'kimi') {
-        response = await sendMessageToKimiViaDebugger(tab.id, message);
-      } else {
-        throw err;
       }
-    }
 
-    if (aiType === 'qianwen' && response && response.success === false) {
-      response = await sendMessageToQianwenViaDebugger(tab.id, message);
-    }
-
-    if (aiType === 'kimi' && response && response.success === false) {
-      response = await sendMessageToKimiViaDebugger(tab.id, message);
-    }
-
-    // For Kimi: even if content script returned success, verify the message
-    // was actually accepted by the controlled editor.  If the send did not
-    // take effect (no streaming, no new user message), fall back to debugger.
-    // Only verify when the content-script path was used — the debugger path
-    // already has its own send-observation step.
-    if (aiType === 'kimi' && usedContentScriptPath && response && response.success === true) {
-      const verified = await verifyKimiContentScriptSend(tab.id, kimiResponseBaseline);
-      if (!verified) {
-        response = await sendMessageToKimiViaDebugger(tab.id, message);
+      if (aiType === 'qianwen' && response && response.success === false) {
+        response = await sendMessageToQianwenViaDebugger(tab.id, message);
       }
     }
 
@@ -247,22 +214,72 @@ async function sendMessageToAI(aiType, message) {
   }
 }
 
+async function sendMessageToKimi(tab, message) {
+  let response;
+  let usedContentScriptPath = false;
+  let kimiResponseBaseline = null;
+
+  try {
+    kimiResponseBaseline = await getKimiVerificationState(tab.id);
+  } catch (_err) {
+    kimiResponseBaseline = null;
+  }
+
+  try {
+    response = await sendMessageToContentScript(tab.id, message);
+    usedContentScriptPath = true;
+  } catch (err) {
+    if (shouldRetryKimiContentScriptSend(err, tab)) {
+      const retried = await retryKimiContentScriptSend(tab.id, message);
+      if (retried) {
+        response = retried;
+        usedContentScriptPath = true;
+      } else {
+        response = await sendMessageToKimiViaDebugger(tab.id, message);
+      }
+    } else {
+      response = await sendMessageToKimiViaDebugger(tab.id, message);
+    }
+  }
+
+  if (response && response.success === false) {
+    return await sendMessageToKimiViaDebugger(tab.id, message);
+  }
+
+  if (usedContentScriptPath && response && response.success === true) {
+    const verified = await verifyKimiContentScriptSend(tab.id, kimiResponseBaseline);
+    if (!verified) {
+      return await sendMessageToKimiViaDebugger(tab.id, message);
+    }
+  }
+
+  return response;
+}
+
+function isKimiContentScriptSendAccepted(baselineState, currentState) {
+  if (!currentState) {
+    return false;
+  }
+
+  if (currentState.streamingActive) {
+    return true;
+  }
+
+  return isNewKimiVerificationContent(baselineState, currentState);
+}
+
 async function verifyKimiContentScriptSend(tabId, baselineState, maxAttempts = 8) {
-  // Poll the content script to check if the message was actually accepted.
-  // A successful send should trigger streaming (stop button) or produce a
-  // newer completed response than the pre-send baseline.
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    await sleep(400);
+    if (attempt > 0) {
+      await sleep(400);
+    }
+
     try {
       const state = await getKimiVerificationState(tabId);
-      if (state && state.streamingActive) {
-        return true;
-      }
-      if (isNewKimiVerificationContent(baselineState, state)) {
+      if (isKimiContentScriptSendAccepted(baselineState, state)) {
         return true;
       }
     } catch (_err) {
-      // Content script unreachable — cannot verify, assume failure
       return false;
     }
   }

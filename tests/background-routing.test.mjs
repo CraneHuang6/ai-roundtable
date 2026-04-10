@@ -152,6 +152,15 @@ function loadBackgroundWithRealtimeResponse(realtimeResponse, tabUrl = 'https://
   });
 }
 
+function createKimiSendMessageStub(response = { success: true }) {
+  return async (_tabId, payload) => {
+    if (payload.type === 'GET_LATEST_RESPONSE') {
+      return { streamingActive: true, captureState: 'streaming', content: '' };
+    }
+    return response;
+  };
+}
+
 test('background test harness reads active repo background.js', () => {
   const source = fs.readFileSync(new URL(import.meta.url), 'utf8');
 
@@ -375,12 +384,7 @@ test('background prefers content-script kimi send and still chooses chat tab ove
       { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' },
       { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
     ],
-    async sendMessage(tabId, payload) {
-      if (payload.type === 'GET_LATEST_RESPONSE') {
-        return { streamingActive: true, captureState: 'streaming', content: '' };
-      }
-      return { success: true };
-    },
+    sendMessage: createKimiSendMessageStub(),
     attachDebugger(target, version) {
       debuggerTargets.push({ type: 'attach', target, version });
     },
@@ -558,12 +562,7 @@ test('background accepts kimi homepage new-chat tab when no chat route exists ye
     tabs: [
       { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' }
     ],
-    async sendMessage(tabId, payload) {
-      if (payload.type === 'GET_LATEST_RESPONSE') {
-        return { streamingActive: true, captureState: 'streaming', content: '' };
-      }
-      return { success: true };
-    }
+    sendMessage: createKimiSendMessageStub()
   });
 
   const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');

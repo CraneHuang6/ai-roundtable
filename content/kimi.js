@@ -149,9 +149,12 @@
       }
     }
 
-    // Trigger additional events to help controlled editors recognize the input
-    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-    inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    if (inputEl.tagName !== 'TEXTAREA') {
+      // Controlled contenteditable editors sometimes need one extra commit tick
+      // after DOM insertion before the send control becomes actionable.
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    }
 
     await sleep(300);
 
