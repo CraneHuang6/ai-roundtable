@@ -698,12 +698,21 @@ async function findAITab(aiType, options = {}) {
   }
 
   if (aiType === 'kimi' || aiType === 'qianwen') {
+    // Prefer tabs already in an active chat session
     const chatTab = matchingTabs.find((tab) => tab.url.includes('/chat/'));
     if (chatTab) {
       return chatTab;
     }
+    // For Kimi, also try new-chat entry point
     if (aiType === 'kimi' && options.requireChatRoute) {
-      return null;
+      const newChatTab = matchingTabs.find((tab) => tab.url.includes('chat_enter_method=new_chat'));
+      if (newChatTab) {
+        return newChatTab;
+      }
+      // Fallback: if no /chat/ or new_chat tab found, still try the first
+      // matching Kimi tab — the content script is injected on all kimi.com
+      // pages and the input field may be available on the home page too.
+      // Returning null here would make sendMessageToAI skip debugger fallback.
     }
   }
 

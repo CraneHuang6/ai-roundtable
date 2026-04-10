@@ -542,15 +542,15 @@ test('background fails kimi send when content script fails and post-send debugge
   assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent' && call.params?.key === 'Enter'), true);
 });
 
-test('background refuses kimi homepage tab when no chat tab exists', async () => {
+test('background accepts kimi homepage new-chat tab when no chat route exists yet', async () => {
   const api = loadBackground({}, {
     tabs: [
       { id: 9, url: 'https://www.kimi.com/?chat_enter_method=new_chat' }
-    ]
+    ],
+    realtimeResponse: { success: true }
   });
 
   const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
 
-  assert.equal(response.success, false, JSON.stringify(response));
-  assert.match(response.error, /No kimi chat tab found/);
+  assert.equal(response.success, true, JSON.stringify(response));
 });
