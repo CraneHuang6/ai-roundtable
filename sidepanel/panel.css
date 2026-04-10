@@ -194,6 +194,7 @@ header .subtitle {
 .targets {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   gap: 4px;
   flex-shrink: 0;
   background: var(--bg-glass);
@@ -214,7 +215,8 @@ header .subtitle {
   border-radius: 6px;
   cursor: pointer;
   transition: all var(--transition-fast);
-  flex: 1;
+  flex: 1 1 calc(33.333% - 4px);
+  min-width: 0;
   justify-content: center;
 }
 
@@ -262,7 +264,7 @@ header .subtitle {
 }
 
 .status.disconnected {
-  background: #EF4444;
+  background: var(--text-muted);
 }
 
 /* ========== INPUT SECTION ========== */
@@ -694,6 +696,7 @@ header .subtitle {
   flex: 1;
   min-height: 0;
   gap: 10px;
+  overflow-y: auto;
 }
 
 /* ========== DISCUSSION MODE ========== */
@@ -747,6 +750,7 @@ header .subtitle {
 
 .participant-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -761,6 +765,7 @@ header .subtitle {
   border-radius: 10px;
   cursor: pointer;
   transition: all var(--transition-fast);
+  flex: 1 1 calc(33.333% - 8px);
 }
 
 .participant-option:hover {

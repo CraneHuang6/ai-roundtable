@@ -1414,6 +1414,8 @@ test('summary view renders one summary card per selected participant', () => {
 
 test('discussion mode keeps the action area accessible in a stable stacked layout', () => {
   const css = fs.readFileSync(PANEL_CSS, 'utf8');
+  const participantOptionsBlock = css.match(/\.participant-options\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const participantOptionBlock = css.match(/\.participant-option\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const discussionActiveBlock = css.match(/\.discussion-active\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const discussionInterjectBlock = css.match(/\.discussion-interject\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const interjectInputBlock = css.match(/#interject-input\s*\{([\s\S]*?)\}/)?.[1] ?? '';
@@ -1427,6 +1429,8 @@ test('discussion mode keeps the action area accessible in a stable stacked layou
   const discussionLogBlock = css.match(/#discussion-mode:not\(\.hidden\)\s*~\s*\.log\s*\{([\s\S]*?)\}/)?.[1] ?? '';
   const discussionCopyrightBlock = css.match(/#discussion-mode:not\(\.hidden\)\s*~\s*\.copyright\s*\{([\s\S]*?)\}/)?.[1] ?? '';
 
+  assert.ok(participantOptionsBlock, 'expected .participant-options styles to exist');
+  assert.ok(participantOptionBlock, 'expected .participant-option styles to exist');
   assert.ok(discussionActiveBlock, 'expected .discussion-active styles to exist');
   assert.ok(discussionHeaderBlock, 'expected .discussion-header styles to exist');
   assert.ok(discussionInfoBlock, 'expected .discussion-info styles to exist');
@@ -1439,6 +1443,15 @@ test('discussion mode keeps the action area accessible in a stable stacked layou
   assert.ok(discussionControlsButtonBlock, 'expected .discussion-controls button styles to exist');
   assert.ok(discussionLogBlock, 'expected a discussion-mode specific log height rule');
   assert.ok(discussionCopyrightBlock, 'expected a discussion-mode specific copyright rule');
+  assert.match(
+    participantOptionsBlock,
+    /flex-wrap\s*:\s*wrap/,
+    'discussion participant row should wrap in narrow sidepanels so later AIs remain reachable'
+  );
+  assert.ok(
+    /flex\s*:\s*1\s+1\s+/.test(participantOptionBlock) || /flex-basis\s*:/.test(participantOptionBlock),
+    'discussion participant pills should opt into a wrapped multi-column layout'
+  );
   assert.match(
     discussionActiveBlock,
     /overflow-y\s*:\s*auto/,

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const PANEL_JS = new URL('../sidepanel/panel.js', import.meta.url);
+const PANEL_CSS = new URL('../sidepanel/panel.css', import.meta.url);
 const loadedPanels = new Set();
 
 test.afterEach(() => {
@@ -481,6 +482,33 @@ test('shared long-text expanded CSS removes the internal height clamp', () => {
   assert.ok(fullBlock, 'expected .long-text-full styles to exist');
   assert.match(fullBlock, /max-height\s*:\s*none/, 'expected expanded content to remove the fixed height limit');
   assert.match(fullBlock, /overflow\s*:\s*visible/, 'expected expanded content to stop scrolling internally');
+});
+
+test('normal mode layout wraps AI targets and scrolls its content in narrow sidepanels', () => {
+  const css = fs.readFileSync(PANEL_CSS, 'utf8');
+  const targetsBlock = css.match(/\.targets\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const targetLabelBlock = css.match(/\.target-label\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const normalModeBlock = css.match(/#normal-mode\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+
+  assert.ok(targetsBlock, 'expected .targets styles to exist');
+  assert.ok(targetLabelBlock, 'expected .target-label styles to exist');
+  assert.ok(normalModeBlock, 'expected #normal-mode styles to exist');
+  assert.match(targetsBlock, /flex-wrap\s*:\s*wrap/, 'expected AI target row to wrap in narrow sidepanels');
+  assert.match(targetLabelBlock, /min-width\s*:\s*0/, 'expected AI target pills to allow shrinking without clipping their contents');
+  assert.ok(
+    /flex\s*:\s*1\s+1\s+/.test(targetLabelBlock) || /flex-basis\s*:/.test(targetLabelBlock),
+    'expected AI target pills to opt into a wrapped multi-column layout'
+  );
+  assert.match(normalModeBlock, /overflow-y\s*:\s*auto/, 'expected normal mode body to scroll so help and log remain reachable');
+});
+
+test('disconnected AI status dot stays muted instead of error red', () => {
+  const css = fs.readFileSync(PANEL_CSS, 'utf8');
+  const disconnectedBlock = css.match(/\.status\.disconnected\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+
+  assert.ok(disconnectedBlock, 'expected .status.disconnected styles to exist');
+  assert.match(disconnectedBlock, /background\s*:\s*var\(--text-muted\)/, 'expected disconnected dots to stay grey when the AI is not shown or not connected');
+  assert.doesNotMatch(disconnectedBlock, /#EF4444|var\(--danger\)/, 'expected disconnected dots to stop using the error red color');
 });
 
 test('normal send polls latest responses when push capture is missing', async () => {
