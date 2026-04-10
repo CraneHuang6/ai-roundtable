@@ -60,6 +60,7 @@
   async function injectMessage(text) {
     lastCapturedContent = '';
     lastCompletionState = 'idle';
+    resetCaptureStateTracker();
 
     const inputEl = findInput();
     if (!inputEl) {
@@ -200,6 +201,64 @@
   let lastCapturedContent = '';
   let lastCompletionState = 'idle';
   let isCapturing = false;
+  const captureStateTracker = {
+    lastContent: '',
+    lastContentChangeAt: null,
+    sawStreaming: false,
+    streamEndedAt: null
+  };
+  const STREAM_END_SETTLE_MS = 1000;
+  const STABLE_CONTENT_SETTLE_MS = 2000;
+
+  function resetCaptureStateTracker() {
+    captureStateTracker.lastContent = '';
+    captureStateTracker.lastContentChangeAt = null;
+    captureStateTracker.sawStreaming = false;
+    captureStateTracker.streamEndedAt = null;
+  }
+
+  function updateCaptureStateTracker(content, streamingActive) {
+    const normalizedContent = (content || '').trim();
+    const now = Date.now();
+
+    if (streamingActive) {
+      captureStateTracker.sawStreaming = true;
+      captureStateTracker.streamEndedAt = null;
+    }
+
+    if (!normalizedContent) {
+      captureStateTracker.lastContent = '';
+      captureStateTracker.lastContentChangeAt = null;
+      return;
+    }
+
+    if (normalizedContent !== captureStateTracker.lastContent) {
+      captureStateTracker.lastContent = normalizedContent;
+      captureStateTracker.lastContentChangeAt = now;
+    } else if (captureStateTracker.lastContentChangeAt === null) {
+      captureStateTracker.lastContentChangeAt = now;
+    }
+
+    if (!streamingActive && captureStateTracker.sawStreaming && captureStateTracker.streamEndedAt === null) {
+      captureStateTracker.streamEndedAt = now;
+    }
+  }
+
+  function hasSettledCompletionEvidence() {
+    if (!captureStateTracker.lastContent || captureStateTracker.lastContentChangeAt === null) {
+      return false;
+    }
+
+    const now = Date.now();
+    const stableForMs = now - captureStateTracker.lastContentChangeAt;
+
+    if (captureStateTracker.sawStreaming && captureStateTracker.streamEndedAt !== null) {
+      return stableForMs >= STREAM_END_SETTLE_MS &&
+        now - captureStateTracker.streamEndedAt >= STREAM_END_SETTLE_MS;
+    }
+
+    return stableForMs >= STABLE_CONTENT_SETTLE_MS;
+  }
 
   function checkForResponse(node) {
     if (isCapturing) return;
@@ -220,16 +279,23 @@
   }
 
   function getCaptureState() {
-    if (isStreamingActive()) {
+    const streamingActive = isStreamingActive();
+    const content = getLatestResponse();
+    updateCaptureStateTracker(content, streamingActive);
+
+    if (streamingActive) {
       return 'streaming';
     }
 
-    const content = getLatestResponse();
     if (!content) {
       return 'idle';
     }
 
     if (lastCompletionState === 'complete' && content === lastCapturedContent) {
+      return 'complete';
+    }
+
+    if (hasSettledCompletionEvidence()) {
       return 'complete';
     }
 

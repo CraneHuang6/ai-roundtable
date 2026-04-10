@@ -340,6 +340,38 @@ test('claude getCaptureState returns complete after capture settles', async () =
   assert.equal(response.streamingActive, false);
 });
 
+test('claude polling metadata reports complete after send reset once streaming has ended and content stays stable', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    streaming: false,
+    currentContent: ''
+  };
+
+  const { api, invokeGetLatestResponse } = loadClaudeContent(state, {
+    startStreamingAfterClick: true
+  });
+
+  await api.injectMessage('第2轮问题');
+
+  state.currentContent = 'Claude 第2轮回复（页面已结束流式输出）';
+
+  let response = invokeGetLatestResponse();
+  assert.equal(response.captureState, 'streaming');
+
+  state.streaming = false;
+  state.now += 1200;
+  response = invokeGetLatestResponse();
+  assert.equal(response.captureState, 'unknown');
+
+  state.now += 1200;
+  response = invokeGetLatestResponse();
+
+  assert.equal(response.content, 'Claude 第2轮回复（页面已结束流式输出）');
+  assert.equal(response.streamingActive, false);
+  assert.equal(response.captureState, 'complete');
+});
+
 test('claude injectMessage fails when text never leaves input and streaming never starts', async () => {
   const state = {
     now: 0,
