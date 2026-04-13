@@ -38,12 +38,16 @@ Use this exact checklist after any change touching `content/chatgpt.js`, `sidepa
    - Run `node --test tests/chatgpt-capture.test.mjs`
    - Confirm the long-tail regression stays green:
      - `chatgpt capture does not lock a truncated long reply when streaming stops before the tail arrives`
+     - `chatgpt getCaptureState stays unknown while search tooling is still running even if action buttons are visible`
+     - `chatgpt capture waits for search tooling to finish before accepting action-button completion`
    - This proves ChatGPT does not finalize on a truncated tail like `这篇文` before the fuller tail lands.
+   - This also proves ChatGPT does not treat "already rendered a first paragraph + action buttons visible" as complete while provider-side search/tool execution is still running.
 
 2. **Normal mode closure (`sidepanel/panel.js` normal polling)**
    - Run `node --test tests/panel-normal-mode.test.mjs`
    - Confirm the normal-mode regression stays green:
      - `normal mode keeps ChatGPT pending when a truncated long reply is still unknown and only accepts the fuller tail later`
+     - `normal mode ignores push captures that are still unknown until ChatGPT sends a complete final push`
    - This proves normal send consumes `streamingActive` / `captureState` and does not accept `captureState === 'unknown'` as final.
 
 3. **Discussion round closure (`sidepanel/panel.js` discussion polling)**
@@ -51,15 +55,23 @@ Use this exact checklist after any change touching `content/chatgpt.js`, `sidepa
    - Confirm the discussion regressions stay green:
      - `discussion mode keeps ChatGPT pending when a truncated long reply is still unknown and only completes after the fuller tail arrives`
      - `discussion mode does not complete a round when ChatGPT completion readiness is unknown`
+     - `discussion mode ignores push captures that are still unknown until ChatGPT sends a complete final push`
    - This proves discussion rounds do not advance on truncated ChatGPT content and only close when the fuller tail is captured.
 
-4. **Manual Chrome spot check**
+4. **Background metadata bridge (`background.js`)**
+   - Run `node --test tests/background-routing.test.mjs`
+   - Confirm the push-metadata regression stays green:
+     - `background preserves RESPONSE_CAPTURED metadata when storing and forwarding push updates`
+   - This proves provider push captures keep `streamingActive` / `captureState` / `updatedAt` instead of silently downgrading to a bare string payload.
+
+5. **Manual Chrome spot check**
    - Reload the unpacked extension
    - Refresh the open ChatGPT tab so the updated content script reinjects
    - In normal mode, send a prompt that reliably yields a long multi-paragraph answer; verify the final captured answer includes the tail paragraph instead of stopping at a half sentence
-   - In discussion mode, run at least one round where ChatGPT produces a long answer; verify the round stays pending until ChatGPT finishes and that the stored round entry matches the full answer
+   - In normal mode, also verify a "先回答一段，然后继续搜索/调用工具" prompt stays pending until the final answer lands
+   - In discussion mode, run at least one round where ChatGPT produces a long answer or search/tool continuation; verify the round stays pending until ChatGPT finishes and that the stored round entry matches the full answer
 
-If any one of these four checks fails, treat the truncation bug as still open; do not rely on a single passing layer.
+If any one of these five checks fails, treat the completion bug as still open; do not rely on a single passing layer.
 
 ## Architecture in one page
 
@@ -134,8 +146,10 @@ Provider-specific notes:
 - If the same discussion round receives a later, longer capture for the same AI, prefer replacing the earlier partial entry instead of ignoring the update
 - Gemini capture is simpler and more selector-sensitive
 - ChatGPT streaming capture strategy - 时间阈值策略不可靠（分段输出时段落间停顿时间不固定），必须采用双重保险：DOM 信号检测（操作按钮组出现）+ 长时间兜底（30秒长度稳定）。单纯依赖停止按钮或复制按钮检测会因 UI 变化导致选择器失效。
+- ChatGPT search/tool continuation - ChatGPT 已渲染首段文本且操作按钮可见，不代表最终完成；如果页面仍有搜索/工具运行信号，`content/chatgpt.js` 必须继续返回 `captureState: 'unknown'` 并阻止 `RESPONSE_CAPTURED` 早发。
 - ChatGPT completion metadata in discussion polling - discussion/normal 侧的 `GET_RESPONSE` 若返回 `streamingActive` / `captureState`，收口必须消费这些元数据；`captureState === 'unknown'` 时继续等待，不要只因文本稳定就进入下一阶段。
 - Normal/discussion completion parity - `sidepanel/panel.js` 的 normal send 与 discussion polling 必须共用同一套 completion readiness 语义；修一边时同步检查另一边，避免一个消费 `captureState`、另一个只看文本变化而重新引入截断或提前收口。
+- Push metadata parity - `RESPONSE_CAPTURED` push 事件不能只传 `content`；provider、`background.js`、`sidepanel/panel.js` 三层都要保留并消费 `streamingActive` / `captureState` / `updatedAt`，否则 push 会绕过 poll 的 readiness 保护并提前收口。
 - Chrome extension content script cache - 修改 content script 后必须同时修改 manifest.json 版本号才能强制 Chrome 重新加载，否则浏览器会继续运行缓存的旧代码。仅点击"重新加载"按钮或刷新页面不足以清除 content script 缓存。
 - Gemini message injection - 文本设置后需触发多个事件（input, change, keydown, keyup）并延长等待时间（300ms）以确保发送按钮启用。添加 Ctrl+Enter 键盘快捷键作为备选发送方式。
 - Gemini background-tab response extraction - `content/gemini.js` 抓取最新回复时优先 `innerText`，但必须回退到 `textContent`；后台标签页里 `innerText` 可能为空或卡住，导致 summary 一直等到切回标签页才完成。
