@@ -39,7 +39,11 @@ function loadBackground(sessionState = {}, options = {}) {
           listeners.onMessage = listener;
         }
       },
-      async sendMessage() {}
+      async sendMessage(message) {
+        if (typeof options.runtimeSendMessage === 'function') {
+          return await options.runtimeSendMessage(message);
+        }
+      }
     },
     tabs: {
       onUpdated: {
@@ -268,6 +272,44 @@ test('background returns stored response metadata when realtime lookup falls bac
     updatedAt: 1712620800000,
     url: 'https://claude.ai/chat/abc',
     fromStorage: true
+  });
+});
+
+test('background preserves RESPONSE_CAPTURED metadata when storing and forwarding push updates', async () => {
+  const forwardedMessages = [];
+  const { api } = getBackgroundApi({}, {
+    runtimeSendMessage(message) {
+      forwardedMessages.push(message);
+    }
+  });
+
+  await api.handleMessage({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 搜索后的最终终稿',
+    streamingActive: false,
+    captureState: 'complete',
+    updatedAt: 1713000000000
+  }, {
+    tab: { url: 'https://chatgpt.com/c/abc' }
+  });
+
+  const stored = await api.getStoredResponses();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(stored.chatgpt)), {
+    content: 'ChatGPT 搜索后的最终终稿',
+    updatedAt: 1713000000000,
+    streamingActive: false,
+    captureState: 'complete',
+    url: 'https://chatgpt.com/c/abc'
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(forwardedMessages.at(-1))), {
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 搜索后的最终终稿',
+    streamingActive: false,
+    captureState: 'complete',
+    updatedAt: 1713000000000
   });
 });
 

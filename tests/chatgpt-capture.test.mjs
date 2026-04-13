@@ -41,7 +41,24 @@ function loadChatgptContent(state) {
     ...createElement(),
     click() {}
   };
+  const actionButtonGroup = {
+    querySelectorAll(selector) {
+      if (selector === 'button') {
+        return Array.from({ length: state.actionButtonCount ?? 0 }, () => createElement());
+      }
+      return [];
+    }
+  };
   const assistantContainer = {
+    parentElement: {
+      querySelector(selector) {
+        if (selector === '[class*="group"]') {
+          return actionButtonGroup;
+        }
+        return null;
+      }
+    },
+    nextElementSibling: actionButtonGroup,
     querySelectorAll() {
       return [];
     },
@@ -83,6 +100,14 @@ function loadChatgptContent(state) {
         selector === 'button[aria-label*="Stop generating"]'
       ) {
         return state.isStreaming ? createElement() : null;
+      }
+
+      if (
+        selector === '[data-testid="agent-turn-status"][data-state="running"]' ||
+        selector === '[data-testid="tool-status"][data-state="running"]' ||
+        selector === '[data-testid="search-status"][data-state="running"]'
+      ) {
+        return state.intermediateActive ? createElement() : null;
       }
 
       return null;
@@ -241,6 +266,53 @@ test('chatgpt capture does not lock a truncated long reply when streaming stops 
   assert.equal(captures.length, 1);
   assert.equal(captures[0].content, full);
   assert.ok(state.now >= 6000, `expected capture to wait past the early truncated plateau, got ${state.now}ms`);
+});
+
+test('chatgpt getCaptureState stays unknown while search tooling is still running even if action buttons are visible', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    intermediateActive: true,
+    actionButtonCount: 4,
+    currentContent: 'ChatGPT 先给出了一段阶段性回答。'
+  };
+
+  const { api } = loadChatgptContent(state);
+
+  assert.equal(api.getCaptureState(), 'unknown');
+
+  state.intermediateActive = false;
+  assert.equal(api.getCaptureState(), 'complete');
+});
+
+test('chatgpt capture waits for search tooling to finish before accepting action-button completion', async () => {
+  const partial = 'ChatGPT 先给出第一段，再继续搜索。';
+  const full = 'ChatGPT 先给出第一段，再继续搜索。\n\n搜索完成后的最终结论。';
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    intermediateActive: true,
+    actionButtonCount: 4,
+    currentContent: partial,
+    onTick(currentTick) {
+      if (currentTick === 10) {
+        this.intermediateActive = false;
+        this.currentContent = full;
+      }
+    }
+  };
+
+  const { api, messages } = loadChatgptContent(state);
+
+  await api.waitForStreamingComplete();
+
+  const captures = messages.filter((message) => message.type === 'RESPONSE_CAPTURED');
+
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].content, full);
+  assert.ok(state.now >= 6000, `expected capture to wait for intermediate search completion, got ${state.now}ms`);
 });
 
 test('chatgpt getCaptureState upgrades to complete after stable content settles without action buttons', () => {

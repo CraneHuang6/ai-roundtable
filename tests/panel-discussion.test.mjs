@@ -1071,6 +1071,57 @@ test('discussion mode keeps ChatGPT pending when a truncated long reply is still
   assert.match(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
 });
 
+test('discussion mode ignores push captures that are still unknown until ChatGPT sends a complete final push', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: 'ChatGPT 搜索中间态 push 不应提前收口',
+    participants: ['chatgpt', 'claude'],
+    currentRound: 2,
+    history: [
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第1轮完整回复' },
+      { round: 1, ai: 'claude', type: 'initial', content: 'Claude 第1轮完整回复' }
+    ],
+    pendingResponses: new Set(['chatgpt']),
+    roundType: 'cross-eval'
+  });
+
+  panel.setLatestResponses({
+    chatgpt: { content: 'ChatGPT 第1轮完整回复', streamingActive: false, captureState: 'complete' },
+    claude: { content: 'Claude 第1轮完整回复', streamingActive: false, captureState: 'complete' }
+  });
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 先回答一段，然后继续搜索。',
+    streamingActive: false,
+    captureState: 'unknown'
+  });
+
+  let state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['chatgpt']);
+  assert.equal(state.history.find((entry) => entry.round === 2 && entry.ai === 'chatgpt'), undefined);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 先回答一段，然后继续搜索。\n\n搜索完成后的最终终稿。',
+    streamingActive: false,
+    captureState: 'complete'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.equal(state.pendingResponses.size, 0);
+  assert.equal(
+    state.history.find((entry) => entry.round === 2 && entry.ai === 'chatgpt')?.content,
+    'ChatGPT 先回答一段，然后继续搜索。\n\n搜索完成后的最终终稿。'
+  );
+  assert.match(panel.getElementById('discussion-status').textContent, /第 2 轮完成/);
+});
+
 test('discussion mode ignores stale 豆包 push capture from the previous round before a new response is really sent', async () => {
   const panel = loadPanel();
   const listener = panel.getOnMessageListener();

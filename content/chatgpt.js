@@ -15,6 +15,22 @@
     '[data-testid*="conversation-turn"]:has([data-message-author-role="assistant"])',
     '.agent-turn'
   ];
+  const INTERMEDIATE_STATE_SELECTORS = [
+    '[data-testid="agent-turn-status"][data-state="running"]',
+    '[data-testid="tool-status"][data-state="running"]',
+    '[data-testid="search-status"][data-state="running"]'
+  ];
+  const INTERMEDIATE_STATUS_SCAN_SELECTOR = [
+    '[role="status"]',
+    '[aria-live="polite"]',
+    '[data-testid*="status"]',
+    '[data-testid*="search"]',
+    '[data-testid*="tool"]'
+  ].join(', ');
+  const INTERMEDIATE_STATUS_PATTERNS = [
+    /\b(searching|browsing|running|thinking|analyzing)\b/i,
+    /(搜索中|检索中|浏览中|思考中|分析中|工具调用中|正在搜索|正在检索|正在浏览)/
+  ];
   const ACTION_BUTTONS_COMPLETE_THRESHOLD = 3;
   const CAPTURE_STATE_SETTLE_MS = 5000;
 
@@ -254,6 +270,24 @@
     return buttonGroup ? buttonGroup.querySelectorAll('button').length : 0;
   }
 
+  function isIntermediateResponseActive() {
+    if (INTERMEDIATE_STATE_SELECTORS.some(selector => document.querySelector(selector))) {
+      return true;
+    }
+
+    const latestContainer = findLatestAssistantContainer();
+    const scope = latestContainer?.parentElement || latestContainer || document;
+    if (!scope?.querySelectorAll) {
+      return false;
+    }
+
+    const statusNodes = Array.from(scope.querySelectorAll(INTERMEDIATE_STATUS_SCAN_SELECTOR));
+    return statusNodes.some((node) => {
+      const text = (node.innerText || node.textContent || '').trim();
+      return text && INTERMEDIATE_STATUS_PATTERNS.some((pattern) => pattern.test(text));
+    });
+  }
+
   function updateCaptureStateTracker(content, streamingActive) {
     const normalizedContent = (content || '').trim();
     const now = Date.now();
@@ -337,6 +371,10 @@
       return 'unknown';
     }
 
+    if (isIntermediateResponseActive()) {
+      return 'unknown';
+    }
+
     if (getActionButtonCount(lastContainer) >= ACTION_BUTTONS_COMPLETE_THRESHOLD) {
       return 'complete';
     }
@@ -350,6 +388,17 @@
 
   function isStreamingActive() {
     return isStopButtonVisible();
+  }
+
+  function buildCapturedResponseMessage(content, metadata = {}) {
+    return {
+      type: 'RESPONSE_CAPTURED',
+      aiType: AI_TYPE,
+      content,
+      streamingActive: Boolean(metadata.streamingActive),
+      captureState: metadata.captureState || 'complete',
+      updatedAt: metadata.updatedAt || Date.now()
+    };
   }
 
   async function waitForStreamingComplete() {
@@ -391,6 +440,7 @@
         const currentContent = getLatestResponse() || '';
         const currentLength = currentContent.length;
         const streamingActive = isStreamingActive();
+        const intermediateActive = isIntermediateResponseActive();
         updateCaptureStateTracker(currentContent, streamingActive);
         if (streamingActive) {
           streamingSeen = true;
@@ -400,6 +450,16 @@
         if (currentLength > 0 && firstContentTime === null) {
           firstContentTime = Date.now();
           console.log('[AI Panel] ChatGPT first content detected, length:', currentLength);
+        }
+
+        if (intermediateActive) {
+          actionButtonsSeenCount = 0;
+          lengthStableCount = 0;
+          streamEndedStableCount = 0;
+          streamEndObservedAt = null;
+          streamEndLength = 0;
+          previousLength = currentLength;
+          continue;
         }
 
         // Strategy 1: Detect action buttons (copy, like, dislike, share, regenerate)
@@ -419,11 +479,7 @@
               if (currentContent !== lastCapturedContent) {
                 lastCapturedContent = currentContent;
                 console.log('[AI Panel] ChatGPT capturing response (action buttons confirmed), final length:', currentLength);
-                safeSendMessage({
-                  type: 'RESPONSE_CAPTURED',
-                  aiType: AI_TYPE,
-                  content: currentContent
-                });
+                safeSendMessage(buildCapturedResponseMessage(currentContent));
                 console.log('[AI Panel] ChatGPT response captured and sent!');
               } else {
                 console.log('[AI Panel] ChatGPT content same as last capture, skipping');
@@ -463,11 +519,7 @@
               if (currentContent !== lastCapturedContent) {
                 lastCapturedContent = currentContent;
                 console.log('[AI Panel] ChatGPT capturing response (stream ended + settle window), final length:', currentLength);
-                safeSendMessage({
-                  type: 'RESPONSE_CAPTURED',
-                  aiType: AI_TYPE,
-                  content: currentContent
-                });
+                safeSendMessage(buildCapturedResponseMessage(currentContent));
                 console.log('[AI Panel] ChatGPT response captured and sent!');
               } else {
                 console.log('[AI Panel] ChatGPT content same as last capture, skipping');
@@ -487,11 +539,7 @@
             if (currentContent !== lastCapturedContent) {
               lastCapturedContent = currentContent;
               console.log('[AI Panel] ChatGPT capturing response (length stable fallback), final length:', currentLength);
-              safeSendMessage({
-                type: 'RESPONSE_CAPTURED',
-                aiType: AI_TYPE,
-                content: currentContent
-              });
+              safeSendMessage(buildCapturedResponseMessage(currentContent));
               console.log('[AI Panel] ChatGPT response captured and sent!');
             } else {
               console.log('[AI Panel] ChatGPT content same as last capture, skipping');

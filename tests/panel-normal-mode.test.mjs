@@ -26,6 +26,7 @@ function loadPanel(responseMap = {}, options = {}) {
   const activeIntervals = new Set();
   const activeTimeouts = new Set();
   let nextTimerId = 1;
+  let onMessageListener = null;
 
   function createTrackedTimer(type, callback, ms = 0) {
     const handle = { id: nextTimerId++, type, callback, ms };
@@ -264,7 +265,9 @@ function loadPanel(responseMap = {}, options = {}) {
   const chrome = {
     runtime: {
       onMessage: {
-        addListener() {}
+        addListener(listener) {
+          onMessageListener = listener;
+        }
       },
       sendMessage(message, callback) {
         sentMessages.push(message);
@@ -372,6 +375,7 @@ function loadPanel(responseMap = {}, options = {}) {
     api: context.__panelTest,
     getElementById: (id) => document.getElementById(id),
     querySelector: (selector) => document.querySelector(selector),
+    getOnMessageListener: () => onMessageListener,
     getRuntimeMessages: () => sentMessages,
     getSentMessages: () => sentMessages.filter((message) => message.type === 'SEND_MESSAGE'),
     getActiveIntervalCount: () => activeIntervals.size,
@@ -560,6 +564,42 @@ test('normal mode keeps ChatGPT pending when a truncated long reply is still unk
     pullMessages.length >= 6,
     `expected normal mode to keep polling through unknown plateau and fuller tail stabilization, got ${pullMessages.length}`
   );
+});
+
+test('normal mode ignores push captures that are still unknown until ChatGPT sends a complete final push', async () => {
+  const panel = loadPanel({
+    chatgpt: { content: 'ChatGPT 的旧回复', streamingActive: false, captureState: 'complete' }
+  });
+  const listener = panel.getOnMessageListener();
+
+  panel.getElementById('message-input').value = '请继续展开';
+  panel.getElementById('target-chatgpt').checked = true;
+
+  await panel.api.handleSend();
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 先返回第一段，再继续搜索。',
+    streamingActive: false,
+    captureState: 'unknown'
+  });
+
+  let controller = panel.api.getNormalPollingController();
+  assert.deepEqual(Array.from(controller.pending), ['chatgpt']);
+  assert.equal(controller.baselines.get('chatgpt'), 'ChatGPT 的旧回复');
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: 'ChatGPT 先返回第一段，再继续搜索。\n\n搜索完成后的最终答案。',
+    streamingActive: false,
+    captureState: 'complete'
+  });
+
+  controller = panel.api.getNormalPollingController();
+  assert.equal(controller.pending.size, 0);
+  assert.equal(controller.baselines.get('chatgpt'), 'ChatGPT 先返回第一段，再继续搜索。\n\n搜索完成后的最终答案。');
 });
 
 test('normal mode restores panel state and resumes polling after reopening the side panel', async () => {

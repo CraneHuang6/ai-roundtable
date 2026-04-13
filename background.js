@@ -121,10 +121,19 @@ async function handleMessage(message, sender) {
     case 'RESPONSE_CAPTURED':
       // Content script captured a response
       await setStoredResponse(message.aiType, message.content, {
+        updatedAt: message.updatedAt,
+        streamingActive: message.streamingActive,
+        captureState: message.captureState,
         url: sender.tab?.url
       });
       // Forward to side panel (include content for discussion mode)
-      notifySidePanel('RESPONSE_CAPTURED', { aiType: message.aiType, content: message.content });
+      notifySidePanel('RESPONSE_CAPTURED', {
+        aiType: message.aiType,
+        content: message.content,
+        streamingActive: Boolean(message.streamingActive),
+        captureState: message.captureState || 'complete',
+        updatedAt: message.updatedAt
+      });
       return { success: true };
 
     case 'CONTENT_SCRIPT_READY':
