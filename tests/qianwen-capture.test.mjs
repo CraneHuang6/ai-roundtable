@@ -44,6 +44,9 @@ function loadQianwenContent(state, options = {}) {
   const messages = [];
   const inputEvents = [];
   const inputTagName = options.inputTagName || 'DIV';
+  const dynamicResponseSelectors = options.responseSelectors || [];
+  const dynamicResponseNodes = options.responseNodes || null;
+  const useLegacyResponseSelectors = options.useLegacyResponseSelectors !== false;
 
   const inputEl = {
     tagName: inputTagName,
@@ -133,7 +136,7 @@ function loadQianwenContent(state, options = {}) {
       return null;
     },
     querySelectorAll(selector) {
-      if (
+      if (useLegacyResponseSelectors && (
         selector === '.qk-markdown-complete .qk-md-text.complete' ||
         selector === '.qk-markdown-complete .qk-md-paragraph' ||
         selector === '.qk-markdown.qk-markdown-complete' ||
@@ -144,7 +147,7 @@ function loadQianwenContent(state, options = {}) {
         selector === '[data-testid="qianwen-assistant-message"]' ||
         selector === '.assistant-message' ||
         selector === '[data-role="assistant"]'
-      ) {
+      )) {
         if (!state.currentContent) {
           return [];
         }
@@ -166,6 +169,35 @@ function loadQianwenContent(state, options = {}) {
                 }
               };
             }
+            return null;
+          }
+        }];
+      }
+      if (dynamicResponseSelectors.includes(selector)) {
+        if (Array.isArray(dynamicResponseNodes)) {
+          return dynamicResponseNodes.map((content) => ({
+            get innerText() {
+              return content;
+            },
+            get textContent() {
+              return content;
+            },
+            querySelector() {
+              return null;
+            }
+          }));
+        }
+        if (!state.currentContent) {
+          return [];
+        }
+        return [{
+          get innerText() {
+            return state.currentContent;
+          },
+          get textContent() {
+            return state.currentContent;
+          },
+          querySelector() {
             return null;
           }
         }];
@@ -316,6 +348,7 @@ test('qianwen page-context submit waits for a send-observed signal instead of re
 
   assert.match(source, /send-not-observed/);
   assert.match(source, /findStopButton/);
+  assert.match(source, /waitForSendButton/);
 });
 
 test('qianwen injectMessage drives textarea input state before clicking send', async () => {
@@ -366,6 +399,32 @@ test('qianwen injectMessage waits for the send button to become enabled after co
   assert.equal(sendButton.disabled, false);
 });
 
+test('qianwen injectMessage tolerates a slower async send-button enablement for long prompts', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api, inputEl, sendButton } = loadQianwenContent(state, { keepInputAfterClick: true });
+  sendButton.disabled = true;
+  state.onTick = (tick) => {
+    if (tick >= 8) {
+      sendButton.disabled = false;
+    }
+  };
+
+  await api.injectMessage('请用中文回复，并对以下 AI 之间的讨论进行总结。');
+
+  assert.equal(inputEl.focused, true);
+  assert.match(inputEl.innerHTML, /请用中文回复，并对以下 AI 之间的讨论进行总结/);
+  assert.equal(sendButton.clicked, true);
+  assert.equal(sendButton.disabled, false);
+});
+
 test('qianwen capture waits for the fuller response before emitting RESPONSE_CAPTURED', async () => {
   const state = {
     now: 0,
@@ -385,6 +444,81 @@ test('qianwen capture waits for the fuller response before emitting RESPONSE_CAP
   assert.equal(captures.length, 1);
   assert.equal(captures[0].aiType, 'qianwen');
   assert.equal(captures[0].content, '第一段观点\n\n第二段完整结论');
+});
+
+test('qianwen capture falls back to generic assistant/message selectors used by the live site', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: true,
+    currentContent: '',
+    partialContent: '第一段观点',
+    fullContent: '第一段观点\n\n第二段完整结论'
+  };
+
+  const { api, messages } = loadQianwenContent(state, {
+    responseSelectors: ['[class*="assistant"]', '[class*="message"]'],
+    useLegacyResponseSelectors: false
+  });
+
+  await api.waitForStreamingComplete();
+
+  const captures = messages.filter((message) => message.type === 'RESPONSE_CAPTURED');
+
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].aiType, 'qianwen');
+  assert.equal(captures[0].content, '第一段观点\n\n第二段完整结论');
+});
+
+test('qianwen getLatestResponse ignores short UI fragments when generic assistant/message selectors are noisy', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadQianwenContent(state, {
+    responseSelectors: ['[class*="assistant"]', '[class*="message"]'],
+    responseNodes: [
+      '最近对话',
+      '1. 创意写作与内容生成\nChatGPT 在大量数据集上进行过训练和微调，措辞恰当且连贯。',
+      '🚀'
+    ],
+    useLegacyResponseSelectors: false
+  });
+
+  assert.equal(
+    api.getLatestResponse(),
+    '1. 创意写作与内容生成\nChatGPT 在大量数据集上进行过训练和微调，措辞恰当且连贯。'
+  );
+});
+
+test('qianwen getLatestResponse ignores generic welcome/help text when it appears after a real answer', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+
+  const { api } = loadQianwenContent(state, {
+    responseSelectors: ['[class*="assistant"]', '[class*="message"]'],
+    responseNodes: [
+      '日常知识查询、信息整理、学习辅助 → 两者均可，可根据具体需求特点选择',
+      '向千问提问\n当然可以，请提出你的问题，我会尽力为你解答。\n7篇来源'
+    ],
+    useLegacyResponseSelectors: false
+  });
+
+  assert.equal(
+    api.getLatestResponse(),
+    '日常知识查询、信息整理、学习辅助 → 两者均可，可根据具体需求特点选择'
+  );
 });
 
 test('qianwen content script rejects INJECT_FILES explicitly', () => {

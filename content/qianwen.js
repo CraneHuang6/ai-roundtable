@@ -4,6 +4,22 @@
   'use strict';
 
   const AI_TYPE = 'qianwen';
+  const RESPONSE_SELECTORS = [
+    '.answerItem-sQ6QT6',
+    '.qk-markdown',
+    '[data-testid="qianwen-assistant-message"]',
+    '.assistant-message',
+    '[data-role="assistant"]',
+    '[class*="assistant"]',
+    '[class*="message"]'
+  ];
+  const STRONG_RESPONSE_SELECTORS = new Set([
+    '.answerItem-sQ6QT6',
+    '.qk-markdown',
+    '[data-testid="qianwen-assistant-message"]',
+    '.assistant-message',
+    '[data-role="assistant"]'
+  ]);
 
   function isContextValid() {
     return chrome.runtime && chrome.runtime.id;
@@ -161,11 +177,7 @@
   }
 
   async function submitMessage(inputEl) {
-    let sendButton = findSendButton();
-    if (!sendButton) {
-      await sleep(300);
-      sendButton = findSendButton();
-    }
+    const sendButton = await waitForEnabledSendButton();
 
     if (sendButton) {
       sendButton.click();
@@ -173,6 +185,17 @@
     }
 
     return false;
+  }
+
+  async function waitForEnabledSendButton(attempts = 12, intervalMs = 300) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const sendButton = findSendButton();
+      if (sendButton) {
+        return sendButton;
+      }
+      await sleep(intervalMs);
+    }
+    return null;
   }
 
   async function submitViaPageContext(text) {
@@ -287,6 +310,16 @@
           await sleep(350);
           return true;
         };
+        const waitForSendButton = async (attempts = 24, intervalMs = 150) => {
+          for (let attempt = 0; attempt < attempts; attempt += 1) {
+            const sendButton = findSendButton();
+            if (sendButton) {
+              return sendButton;
+            }
+            await sleep(intervalMs);
+          }
+          return null;
+        };
         (async () => {
           try {
             const input = findInput();
@@ -297,10 +330,10 @@
 
             const beforeText = getInputText(input);
             await fillViaExecCommand(input);
-            let sendButton = findSendButton();
+            let sendButton = await waitForSendButton();
             if (!sendButton) {
               await fillViaSlateFiber(input);
-              sendButton = findSendButton();
+              sendButton = await waitForSendButton();
             }
             if (!sendButton) {
               emit(false, 'send-disabled');
@@ -368,8 +401,8 @@
     if (isCapturing) return;
 
     const isResponse =
-      node.matches?.('.answerItem-sQ6QT6, .qk-markdown, [data-testid="qianwen-assistant-message"], .assistant-message, [data-role="assistant"]') ||
-      node.querySelector?.('.answerItem-sQ6QT6, .qk-markdown, [data-testid="qianwen-assistant-message"], .assistant-message, [data-role="assistant"]');
+      RESPONSE_SELECTORS.some((selector) => node.matches?.(selector)) ||
+      RESPONSE_SELECTORS.some((selector) => node.querySelector?.(selector));
 
     if (isResponse) {
       waitForStreamingComplete();
@@ -416,13 +449,7 @@
       }
     }
 
-    const selectors = [
-      '.answerItem-sQ6QT6',
-      '.qk-markdown',
-      '[data-testid="qianwen-assistant-message"]',
-      '.assistant-message',
-      '[data-role="assistant"]'
-    ];
+    const selectors = [...RESPONSE_SELECTORS];
 
     for (const selector of selectors) {
       const messages = Array.from(document.querySelectorAll(selector));
@@ -436,7 +463,7 @@
           message.textContent ||
           ''
         ).trim();
-        if (!content || content === '你好，我是千问') {
+        if (!isMeaningfulResponseContent(content, { generic: !STRONG_RESPONSE_SELECTORS.has(selector) })) {
           continue;
         }
         return content;
@@ -444,6 +471,48 @@
     }
 
     return null;
+  }
+
+  function isMeaningfulResponseContent(content, options = {}) {
+    const normalized = String(content || '').trim();
+    if (!normalized || normalized === '你好，我是千问') {
+      return false;
+    }
+
+    if (!options.generic) {
+      return true;
+    }
+
+    const genericUiFragments = new Set([
+      '最近对话',
+      '新建对话',
+      '发送信息',
+      '停止回答',
+      '停止生成',
+      'Qwen0427',
+      '自动补全'
+    ]);
+    if (genericUiFragments.has(normalized)) {
+      return false;
+    }
+
+    if (
+      normalized.includes('向千问提问') &&
+      normalized.includes('当然可以，请提出你的问题')
+    ) {
+      return false;
+    }
+
+    if (/^[\p{Extended_Pictographic}\p{Emoji_Presentation}\s]+$/u.test(normalized)) {
+      return false;
+    }
+
+    const hasSentenceSignal = /[\n。！？!?：:；;]/.test(normalized);
+    if (normalized.length < 8 && !hasSentenceSignal) {
+      return false;
+    }
+
+    return true;
   }
 
   async function waitForStreamingComplete() {

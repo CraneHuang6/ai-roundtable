@@ -195,7 +195,13 @@ test('background maps Kimi host to kimi provider id', () => {
   assert.equal(api.getAITypeFromUrl('https://www.kimi.com/?chat_enter_method=new_chat'), 'kimi');
 });
 
-test('background stored response defaults include doubao, qianwen, and kimi slots', async () => {
+test('background maps Grok host to grok provider id', () => {
+  const api = loadBackground();
+
+  assert.equal(api.getAITypeFromUrl('https://grok.com/'), 'grok');
+});
+
+test('background stored response defaults include doubao, qianwen, kimi, and grok slots', async () => {
   const api = loadBackground();
 
   const responses = await api.getStoredResponses();
@@ -206,7 +212,8 @@ test('background stored response defaults include doubao, qianwen, and kimi slot
     gemini: null,
     doubao: null,
     qianwen: null,
-    kimi: null
+    kimi: null,
+    grok: null
   });
 });
 

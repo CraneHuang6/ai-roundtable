@@ -335,6 +335,12 @@ function loadPanel(responseMap = {}, options = {}) {
     console,
     document,
     chrome,
+    FileReader: class FileReader {
+      readAsDataURL(file) {
+        this.result = `data:${file.type || 'application/octet-stream'};base64,${file.mockBase64 || 'ZmFrZQ=='}`;
+        this.onload?.();
+      }
+    },
     confirm: () => true,
     setInterval: trackedSetInterval,
     clearInterval: trackedClearInterval,
@@ -362,6 +368,7 @@ function loadPanel(responseMap = {}, options = {}) {
     log,
     parseMessage,
     getProviderLabel,
+    addFile,
     restorePanelState: typeof restorePanelState === 'function' ? restorePanelState : undefined,
     persistPanelState: typeof persistPanelState === 'function' ? persistPanelState : undefined,
     getNormalPollingController: () => normalPollingController
@@ -607,7 +614,7 @@ test('normal mode restores panel state and resumes polling after reopening the s
     panelSession: {
       mode: 'normal',
       messageDraft: '请继续追问这个问题',
-      normalTargets: { claude: false, chatgpt: true, gemini: false, doubao: false, qianwen: false, kimi: false },
+      normalTargets: { claude: false, chatgpt: true, gemini: false, doubao: false, qianwen: false, kimi: false, grok: false },
       normalPolling: {
         pending: ['chatgpt'],
         baselines: [['chatgpt', 'ChatGPT 的旧回复']],
@@ -650,7 +657,7 @@ test('normal mode persists active state for later restore', async () => {
     version: 4,
     mode: 'normal',
     messageDraft: '',
-    normalTargets: { claude: true, chatgpt: false, gemini: false, doubao: false, qianwen: false, kimi: false },
+    normalTargets: { claude: true, chatgpt: false, gemini: false, doubao: false, qianwen: false, kimi: false, grok: false },
     normalPolling: {
       pending: ['claude'],
       baselines: [['claude', 'Claude 的旧回复']],
@@ -817,4 +824,85 @@ test('getProviderLabel maps kimi to Kimi', () => {
   const panel = loadPanel();
 
   assert.equal(panel.api.getProviderLabel('kimi'), 'Kimi');
+});
+
+test('parseMessage accepts Grok mentions in direct cross-reference syntax', () => {
+  const panel = loadPanel();
+
+  const parsed = panel.api.parseMessage('@Grok 评价一下 @Claude');
+
+  assert.equal(parsed.crossRef, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.targetAIs)), ['grok']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sourceAIs)), ['claude']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.mentions)), ['grok', 'claude']);
+});
+
+test('parseMessage accepts Grok in explicit /cross routing', () => {
+  const panel = loadPanel();
+
+  const parsed = panel.api.parseMessage('/cross @Claude @Grok <- @ChatGPT 对比一下');
+
+  assert.equal(parsed.crossRef, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.targetAIs)), ['claude', 'grok']);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sourceAIs)), ['chatgpt']);
+  assert.equal(parsed.originalMessage, '对比一下');
+});
+
+test('normal send includes grok when its checkbox is selected', async () => {
+  const panel = loadPanel();
+
+  panel.getElementById('message-input').value = '请给出你的判断';
+  panel.getElementById('target-grok').checked = true;
+  panel.getElementById('target-claude').checked = false;
+  panel.getElementById('target-chatgpt').checked = false;
+  panel.getElementById('target-gemini').checked = false;
+  panel.getElementById('target-doubao').checked = false;
+  panel.getElementById('target-qianwen').checked = false;
+  panel.getElementById('target-kimi').checked = false;
+
+  await panel.api.handleSend();
+
+  const sendMessages = panel.getSentMessages();
+
+  assert.equal(sendMessages.length, 1);
+  assert.equal(sendMessages[0].aiType, 'grok');
+  assert.equal(sendMessages[0].message, '请给出你的判断');
+});
+
+test('getProviderLabel maps grok to Grok', () => {
+  const panel = loadPanel();
+
+  assert.equal(panel.api.getProviderLabel('grok'), 'Grok');
+});
+
+test('normal send skips Grok file upload explicitly while continuing upload-capable targets', async () => {
+  const panel = loadPanel();
+
+  panel.getElementById('message-input').value = '请结合附件回答';
+  panel.getElementById('target-claude').checked = true;
+  panel.getElementById('target-grok').checked = true;
+  panel.getElementById('target-chatgpt').checked = false;
+  panel.getElementById('target-gemini').checked = false;
+  panel.getElementById('target-doubao').checked = false;
+  panel.getElementById('target-qianwen').checked = false;
+  panel.getElementById('target-kimi').checked = false;
+  panel.api.addFile({
+    name: 'brief.txt',
+    size: 16,
+    type: 'text/plain',
+    mockBase64: 'YnJpZWY='
+  });
+
+  await panel.api.handleSend();
+
+  const runtimeMessages = panel.getRuntimeMessages();
+  const uploadTargets = runtimeMessages
+    .filter((message) => message.type === 'SEND_FILES')
+    .map((message) => message.aiType);
+  const sendTargets = panel.getSentMessages().map((message) => message.aiType);
+  const source = fs.readFileSync(PANEL_JS, 'utf8');
+
+  assert.deepEqual(uploadTargets, ['claude']);
+  assert.deepEqual(sendTargets, ['claude', 'grok']);
+  assert.match(source, /log\(`\$\{getProviderLabel\(target\)\}: 暂不支持自动文件上传`, 'error'\)/);
 });

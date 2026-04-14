@@ -1239,6 +1239,79 @@ test('discussion summary waits for fuller pushed responses before finalizing the
   assert.equal(summaryEntries.find((entry) => entry.ai === 'gemini')?.content, geminiFull);
 });
 
+test('discussion summary ignores a late fuller push from the previous round before ChatGPT sends an actual summary', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+  const previousChatGPTReply = 'ChatGPT 第 2 轮观点第一版';
+  const latePreviousChatGPTReply = `${previousChatGPTReply}\n\nChatGPT 第 2 轮补充尾段`;
+  const actualChatGPTSummary = 'ChatGPT 总结：\n1. 共识\n2. 分歧\n3. 结论';
+  const actualGeminiSummary = 'Gemini 总结：\n1. 共识\n2. 分歧\n3. 结论';
+
+  panel.setLatestResponses({
+    chatgpt: previousChatGPTReply,
+    gemini: 'Gemini 第 2 轮观点'
+  });
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: '总结阶段不能把上一轮晚到回复当成总结',
+    participants: ['chatgpt', 'gemini'],
+    currentRound: 2,
+    history: [
+      { round: 1, ai: 'chatgpt', type: 'initial', content: 'ChatGPT 第 1 轮观点' },
+      { round: 1, ai: 'gemini', type: 'initial', content: 'Gemini 第 1 轮观点' },
+      { round: 2, ai: 'chatgpt', type: 'cross-eval', content: previousChatGPTReply },
+      { round: 2, ai: 'gemini', type: 'cross-eval', content: 'Gemini 第 2 轮观点' }
+    ],
+    pendingResponses: new Set(),
+    roundType: 'cross-eval'
+  });
+
+  await panel.api.generateSummary();
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: latePreviousChatGPTReply,
+    streamingActive: false,
+    captureState: 'complete'
+  });
+
+  let state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses).sort(), ['chatgpt', 'gemini']);
+  assert.equal(
+    state.history.find((entry) => entry.ai === 'chatgpt' && entry.type === 'summary'),
+    undefined
+  );
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'gemini',
+    content: actualGeminiSummary,
+    streamingActive: false,
+    captureState: 'complete'
+  });
+
+  state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['chatgpt']);
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'chatgpt',
+    content: actualChatGPTSummary,
+    streamingActive: false,
+    captureState: 'complete'
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+
+  state = panel.api.getDiscussionState();
+  const summaryEntries = state.history.filter((entry) => entry.type === 'summary');
+  assert.equal(state.active, false);
+  assert.equal(summaryEntries.find((entry) => entry.ai === 'chatgpt')?.content, actualChatGPTSummary);
+  assert.equal(summaryEntries.find((entry) => entry.ai === 'gemini')?.content, actualGeminiSummary);
+});
+
 test('cross reference treats whitespace-only source responses as missing', async () => {
   const panel = loadPanel();
   panel.setLatestResponses({
@@ -1658,4 +1731,53 @@ test('discussion participant badge uses Kimi instead of kimi', async () => {
   assert.match(panel.getElementById('participants-badge').textContent, /Claude/);
   assert.match(panel.getElementById('participants-badge').textContent, /Kimi/);
   assert.doesNotMatch(panel.getElementById('participants-badge').textContent, /kimi/);
+});
+
+test('discussion mode enables start for a grok-inclusive 3-person selection', () => {
+  const panel = loadPanel();
+
+  panel.setSelectedParticipants(['claude', 'chatgpt', 'grok']);
+  panel.api.validateParticipants();
+
+  assert.equal(panel.getElementById('start-discussion-btn').disabled, false);
+});
+
+test('discussion participant badge uses Grok instead of grok', async () => {
+  const panel = loadPanel();
+
+  panel.setSelectedParticipants(['claude', 'grok']);
+  panel.getElementById('discussion-topic').value = 'Grok 参与讨论';
+
+  await panel.api.startDiscussion();
+
+  assert.match(panel.getElementById('participants-badge').textContent, /Claude/);
+  assert.match(panel.getElementById('participants-badge').textContent, /Grok/);
+  assert.doesNotMatch(panel.getElementById('participants-badge').textContent, /grok/);
+});
+
+test('discussion keeps Grok pending when pushed completion metadata is unknown', async () => {
+  const panel = loadPanel();
+  const listener = panel.getOnMessageListener();
+
+  panel.api.setDiscussionState({
+    active: true,
+    topic: 'Grok 收口保护',
+    participants: ['claude', 'grok'],
+    currentRound: 1,
+    history: [],
+    pendingResponses: new Set(['grok']),
+    roundType: 'initial'
+  });
+
+  listener({
+    type: 'RESPONSE_CAPTURED',
+    aiType: 'grok',
+    content: 'Grok 先给出第一段，再继续生成。',
+    streamingActive: false,
+    captureState: 'unknown'
+  });
+
+  const state = panel.api.getDiscussionState();
+  assert.deepEqual(Array.from(state.pendingResponses), ['grok']);
+  assert.equal(state.history.length, 0);
 });

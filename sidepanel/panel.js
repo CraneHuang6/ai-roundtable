@@ -42,6 +42,13 @@ const PROVIDERS = [
     hosts: ['www.kimi.com'],
     mention: '@Kimi',
     supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
+  },
+  {
+    id: 'grok',
+    label: 'Grok',
+    hosts: ['grok.com'],
+    mention: '@Grok',
+    supports: { normalSend: true, responseCapture: true, discussion: true, mutual: true, cross: true, fileUpload: false }
   }
 ];
 
@@ -1161,6 +1168,9 @@ function shouldHandleDiscussionCapture(aiType, content, responseMeta = {}) {
   }
 
   if (discussionState.pendingResponses.has(aiType)) {
+    if (isStaleSummaryCarryover(aiType, normalizedResponse)) {
+      return false;
+    }
     return shouldAcceptPushResponse(aiType, normalizedResponse, baseline, discussionPollingState, responseMeta);
   }
 
@@ -1531,9 +1541,26 @@ function clearDiscussionPolling() {
   clearResponsePolling(discussionPollingController);
 }
 
+function isStaleSummaryCarryover(aiType, normalizedResponse) {
+  if (discussionState.roundType !== 'summary' || !discussionState.pendingResponses.has(aiType)) {
+    return false;
+  }
+
+  const latestNonSummaryEntry = [...discussionState.history]
+    .reverse()
+    .find((entry) => entry.ai === aiType && entry.type !== 'summary');
+  const previousResponse = latestNonSummaryEntry?.content?.trim() || '';
+
+  return Boolean(previousResponse) && normalizedResponse.startsWith(previousResponse);
+}
+
 function shouldAcceptPolledDiscussionResponse(ai, normalizedResponse, _controller, responseMeta = {}) {
   const baseline = discussionResponseBaselines.get(ai) || '';
   if (!normalizedResponse || normalizedResponse === baseline) {
+    return false;
+  }
+
+  if (isStaleSummaryCarryover(ai, normalizedResponse)) {
     return false;
   }
 

@@ -5,7 +5,7 @@
 
 > 让多个 AI 助手围桌讨论，交叉评价，深度协作
 
-一个 Chrome 扩展，让你像"会议主持人"一样，同时操控多个 AI（Claude、ChatGPT、Gemini、豆包、千问），实现真正的 AI 圆桌会议。
+一个 Chrome 扩展，让你像"会议主持人"一样，同时操控多个 AI（Claude、ChatGPT、Gemini、豆包、千问、Kimi、Grok），实现真正的 AI 圆桌会议。
 
 <!-- TODO: 添加 GIF 演示 -->
 <!-- ![Demo GIF](assets/demo.gif) -->
@@ -85,7 +85,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 - **文件上传** - 同时向多个 AI 发送图片或文档附件
 - **互评模式** - 让所有 AI 互相评价，对等参与（/mutual 命令）
 - **交叉引用** - 让 Claude 评价 ChatGPT 的回答，或反过来
-- **讨论模式** - 2~3 个 AI 就同一主题进行多轮深度讨论，可从 Claude / ChatGPT / Gemini / 豆包 / 千问中选择参与者
+- **讨论模式** - 2~3 个 AI 就同一主题进行多轮深度讨论，可从 Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi / Grok 中选择参与者
 - **无需 API** - 直接操作网页界面，使用你现有的 AI 订阅
 
 ---
@@ -136,6 +136,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
    - [豆包](https://www.doubao.com/chat/)
    - [千问](https://www.qianwen.com/?ch=tongyi_redirect)
    - [Kimi](https://www.kimi.com/?chat_enter_method=new_chat)
+   - [Grok](https://grok.com/)
 
 2. 推荐使用 Chrome 的 Split Tab 功能，将 2 个 AI 页面并排显示
 
@@ -148,7 +149,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 ### 普通模式
 
 **基本发送**
-1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi）
+1. 勾选要发送的目标 AI（Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi / Grok）
 2. 输入消息
 3. 按 Enter 或点击「发送」按钮
 
@@ -156,6 +157,11 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 - 扩展会优先复用现有 Kimi 会话；如果当前还停在 `new_chat` 首页入口，也会继续尝试把消息发出去
 - 发送后不会只因页面上已有旧回复就误判成功，而是继续检查是否真的开始流式回复，或是否出现了新的回复状态
 - 如果 Kimi 的受控编辑器吞掉了 DOM 注入但页面没有真正开始回复，后台会自动回退到 debugger 路径再补发一次
+
+**Grok 接入说明**
+- Grok 已作为标准 provider 接入普通模式、`/mutual`、`/cross` 和讨论模式
+- 当前版本只支持 `https://grok.com/`，不兼容 X 内嵌 Grok 入口
+- Grok 回复抓取会保留 `streamingActive` 与 `captureState` 元数据，避免普通模式和讨论模式在回复仍未完成时提前收口
 
 **千问发送稳定性说明**
 - 千问已经可以作为独立 provider 参与普通模式、`/mutual`、`/cross`、`@` 提及和讨论模式
@@ -204,7 +210,7 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 
 ### 讨论模式
 
-让 2~3 个 AI 就同一主题进行深度讨论（Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi 中任意 2~3 个）：
+让 2~3 个 AI 就同一主题进行深度讨论（Claude / ChatGPT / Gemini / 豆包 / 千问 / Kimi / Grok 中任意 2~3 个）：
 
 1. 点击顶部「讨论」切换到讨论模式
 2. 选择 2~3 个参与讨论的 AI
@@ -239,7 +245,8 @@ ai-roundtable/
 │   ├── gemini.js          # Gemini 页面注入脚本
 │   ├── doubao.js          # 豆包页面注入脚本
 │   ├── qianwen.js         # 千问页面注入脚本
-│   └── kimi.js            # Kimi 页面注入脚本
+│   ├── kimi.js            # Kimi 页面注入脚本
+│   └── grok.js            # Grok 页面注入脚本
 └── icons/                  # 扩展图标
 ```
 
@@ -287,7 +294,7 @@ ai-roundtable/
 
 - 依赖各 AI 平台的 DOM 结构，平台更新可能导致功能失效
 - 不支持 Claude Artifacts、ChatGPT Canvas 等特殊功能
-- **Gemini、豆包、千问、Kimi 不支持自动文件上传** - 本轮接入仅支持文本发送与回复捕获；若带文件发送，系统会跳过这些 provider，并继续向支持文件上传的 provider 发送
+- **Gemini、豆包、千问、Kimi、Grok 不支持自动文件上传** - 本轮接入仅支持文本发送与回复捕获；若带文件发送，系统会跳过这些 provider，并继续向支持文件上传的 provider 发送
 - Kimi 的文本发送虽然已补上首页入口回退、受控编辑器验证和 debugger 重试，但底层仍然依赖网页 DOM 与浏览器调试能力，后续若 Kimi 大改前端结构，相关链路仍可能再次漂移
 
 ---
