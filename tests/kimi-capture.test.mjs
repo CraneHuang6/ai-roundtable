@@ -37,6 +37,109 @@ function createElement() {
   };
 }
 
+function createKimiNode({ text = '', className = '', attributes = {}, children = [] } = {}, parent = null) {
+  const node = {
+    className,
+    attributes,
+    parent,
+    removed: false,
+    children: [],
+    get innerText() {
+      return this.textContent;
+    },
+    get textContent() {
+      if (this.removed) {
+        return '';
+      }
+      const childText = this.children.map((child) => child.textContent).filter(Boolean).join('\n');
+      return [text, childText].filter(Boolean).join(childText && text ? '\n' : '');
+    },
+    querySelector(selector) {
+      return this.querySelectorAll(selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      const selectors = selector.split(',').map((item) => item.trim()).filter(Boolean);
+      const matches = [];
+      const visit = (candidate) => {
+        if (candidate.removed) {
+          return;
+        }
+        if (selectors.some((singleSelector) => candidate.matches(singleSelector))) {
+          matches.push(candidate);
+        }
+        candidate.children.forEach(visit);
+      };
+      this.children.forEach(visit);
+      return matches;
+    },
+    matches(selector) {
+      if (!selector) {
+        return false;
+      }
+      if (selector === '.markdown') {
+        return this.className.split(/\s+/).includes('markdown');
+      }
+      if (selector === '.markdown-container') {
+        return this.className.split(/\s+/).includes('markdown-container');
+      }
+      if (selector === '[class*="markdown"]') {
+        return this.className.includes('markdown');
+      }
+      if (selector === '[class*="content"]') {
+        return this.className.includes('content');
+      }
+      if (selector === '[class*="response"]') {
+        return this.className.includes('response');
+      }
+      if (selector === '[data-testid*="content"]') {
+        return String(this.attributes['data-testid'] || '').includes('content');
+      }
+      return false;
+    },
+    closest(selector) {
+      let current = this;
+      while (current) {
+        if (current.matches(selector)) {
+          return current;
+        }
+        current = current.parent;
+      }
+      return null;
+    },
+    getAttribute(name) {
+      return this.attributes[name] ?? null;
+    },
+    contains(other) {
+      let current = other;
+      while (current) {
+        if (current === this) {
+          return true;
+        }
+        current = current.parent;
+      }
+      return false;
+    },
+    cloneNode(deep = false) {
+      return createKimiNode({
+        text,
+        className,
+        attributes: { ...attributes },
+        children: deep ? this.children.map((child) => child.cloneNode(true)) : []
+      });
+    },
+    remove() {
+      this.removed = true;
+    }
+  };
+
+  node.children = children.map((child) => {
+    child.parent = node;
+    return child;
+  });
+
+  return node;
+}
+
 function loadKimiContent(state, options = {}) {
   const messages = [];
   const inputEvents = [];
@@ -128,6 +231,9 @@ function loadKimiContent(state, options = {}) {
       if (options.startStreamingAfterClick) {
         state.isStreaming = true;
       }
+      if (options.incrementUserMessagesAfterClick) {
+        state.visibleUserMessageCount = (state.visibleUserMessageCount ?? visibleUserMessageCount) + 1;
+      }
     },
     closest(selector) {
       if (!selector || selector === '.send-button-container') {
@@ -207,7 +313,8 @@ function loadKimiContent(state, options = {}) {
         selector === '.segment-user';
 
       if (userMatch) {
-        return Array.from({ length: visibleUserMessageCount }, () => ({
+        const userCount = state.visibleUserMessageCount ?? visibleUserMessageCount;
+        return Array.from({ length: userCount }, () => ({
           offsetParent: {},
           getClientRects() {
             return [1];
@@ -223,6 +330,9 @@ function loadKimiContent(state, options = {}) {
             : legacyMatch;
 
       if (selectorAllowed) {
+        if (options.assistantMessages) {
+          return options.assistantMessages;
+        }
         if (!state.currentContent) {
           return [];
         }
@@ -388,12 +498,14 @@ test('kimi injectMessage uses execCommand-style insertion for contenteditable in
 
   const { api, inputEl, sendButton, execCommands } = loadKimiContent(state, { keepInputAfterClick: true, startStreamingAfterClick: true });
 
-  await api.injectMessage('请用中文总结这个问题');
+  const result = await api.injectMessage('请用中文总结这个问题');
 
   assert.equal(inputEl.focused, true);
   assert.deepEqual(execCommands, [{ command: 'insertText', value: '请用中文总结这个问题' }]);
   assert.match(inputEl.innerHTML, /请用中文总结这个问题/);
   assert.equal(sendButton.clicked, true);
+  assert.equal(result.success, true);
+  assert.equal(result.sendVerification.reason, 'streaming-started');
 });
 
 test('kimi injectMessage uses non-button send container when the page exposes svg send controls', async () => {
@@ -408,9 +520,11 @@ test('kimi injectMessage uses non-button send container when the page exposes sv
 
   const { api, sendButton } = loadKimiContent(state, { keepInputAfterClick: true, startStreamingAfterClick: true });
 
-  await api.injectMessage('请只回复：KIMI-SEND-CONTAINER');
+  const result = await api.injectMessage('请只回复：KIMI-SEND-CONTAINER');
 
   assert.equal(sendButton.clicked, true);
+  assert.equal(result.success, true);
+  assert.equal(result.sendVerification.reason, 'streaming-started');
 });
 
 test('kimi getLatestResponse reads assistant reply from real Kimi chat DOM structure', () => {
@@ -426,6 +540,69 @@ test('kimi getLatestResponse reads assistant reply from real Kimi chat DOM struc
   const { api } = loadKimiContent(state, { assistantSelectorMode: 'real' });
 
   assert.equal(api.getLatestResponse(), '这是 Kimi 在真实聊天 DOM 里的回复');
+});
+
+test('kimi getLatestResponse prefers final answer markdown over preceding thinking markdown', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+  const thinking = createKimiNode({
+    text: '用户背景：税务专业人士\n我应该：用中文回复\n不需要使用工具，这是纯观点分享。',
+    className: 'markdown kimi-thinking-content',
+    attributes: { 'data-testid': 'kimi-thinking-content' }
+  });
+  const finalAnswer = createKimiNode({
+    text: '我的看法是：这篇文章最有价值的地方，是把意图从固定命令改成可校准的工作假设。',
+    className: 'markdown kimi-answer-content',
+    attributes: { 'data-testid': 'kimi-answer-content' }
+  });
+  const assistantMessage = createKimiNode({
+    className: 'chat-content-item chat-content-item-assistant',
+    children: [thinking, finalAnswer]
+  });
+
+  const { api } = loadKimiContent(state, { assistantMessages: [assistantMessage] });
+
+  assert.equal(
+    api.getLatestResponse(),
+    '我的看法是：这篇文章最有价值的地方，是把意图从固定命令改成可校准的工作假设。'
+  );
+});
+
+test('kimi getLatestResponse removes thinking subtree before falling back to whole assistant text', () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: ''
+  };
+  const thinking = createKimiNode({
+    text: '思考过程\n用户背景：税务专业人士\n我应该：提供结构化建议。',
+    className: 'kimi-reasoning-block',
+    attributes: { 'aria-label': '思考过程' }
+  });
+  const finalAnswer = createKimiNode({
+    text: '最终建议：把每天的最高指令写成可复盘的一句话，再用实际行动数据校准它。',
+    className: 'answer-content'
+  });
+  const assistantMessage = createKimiNode({
+    className: 'chat-content-item chat-content-item-assistant',
+    children: [thinking, finalAnswer]
+  });
+
+  const { api } = loadKimiContent(state, { assistantMessages: [assistantMessage] });
+
+  assert.equal(
+    api.getLatestResponse(),
+    '最终建议：把每天的最高指令写成可复盘的一句话，再用实际行动数据校准它。'
+  );
 });
 
 test('kimi injectMessage waits for a delayed send container to become enabled before clicking', async () => {
@@ -445,10 +622,37 @@ test('kimi injectMessage waits for a delayed send container to become enabled be
     enableSendAfterTick: 2
   });
 
-  await api.injectMessage('请只回复：KIMI-DELAYED-SEND');
+  const result = await api.injectMessage('请只回复：KIMI-DELAYED-SEND');
 
   assert.equal(sendButton.classList.contains('disabled'), false);
   assert.equal(sendButton.clicked, true);
+  assert.equal(result.success, true);
+  assert.equal(result.sendVerification.reason, 'streaming-started');
+});
+
+test('kimi injectMessage returns user-message-added when a new user bubble appears before input clears', async () => {
+  const state = {
+    now: 0,
+    tick: 0,
+    isStreaming: false,
+    currentContent: '',
+    partialContent: '',
+    fullContent: '',
+    visibleUserMessageCount: 1
+  };
+
+  const { api } = loadKimiContent(state, {
+    keepInputAfterClick: true,
+    startStreamingAfterClick: false,
+    visibleUserMessageCount: 1,
+    incrementUserMessagesAfterClick: true
+  });
+
+  const result = await api.injectMessage('请只回复：KIMI-USER-MESSAGE-ADDED');
+
+  assert.equal(result.success, true);
+  assert.equal(result.sendVerification.observed, true);
+  assert.equal(result.sendVerification.reason, 'user-message-added');
 });
 
 test('kimi capture waits for the fuller response before emitting RESPONSE_CAPTURED', async () => {

@@ -227,13 +227,6 @@ async function sendMessageToAI(aiType, message) {
 async function sendMessageToKimi(tab, message) {
   let response;
   let usedContentScriptPath = false;
-  let kimiResponseBaseline = null;
-
-  try {
-    kimiResponseBaseline = await getKimiVerificationState(tab.id);
-  } catch (_err) {
-    kimiResponseBaseline = null;
-  }
 
   try {
     response = await sendMessageToContentScript(tab.id, message);
@@ -246,74 +239,86 @@ async function sendMessageToKimi(tab, message) {
         usedContentScriptPath = true;
       } else {
         response = await sendMessageToKimiViaDebugger(tab.id, message);
+        await recordKimiSendDiagnostic(tab, {
+          path: 'debugger-fallback-used',
+          trigger: 'content-script-retry-failed',
+          success: Boolean(response?.success),
+          error: response?.error || err.message
+        });
       }
     } else {
       response = await sendMessageToKimiViaDebugger(tab.id, message);
+      await recordKimiSendDiagnostic(tab, {
+        path: 'debugger-fallback-used',
+        trigger: 'content-script-error',
+        success: Boolean(response?.success),
+        error: response?.error || err.message
+      });
     }
   }
 
   if (response && response.success === false) {
-    return await sendMessageToKimiViaDebugger(tab.id, message);
+    const fallbackResponse = await sendMessageToKimiViaDebugger(tab.id, message);
+    await recordKimiSendDiagnostic(tab, {
+      path: 'debugger-fallback-used',
+      trigger: 'content-script-false',
+      success: Boolean(fallbackResponse?.success),
+      error: fallbackResponse?.error || response.error,
+      originalResponse: response
+    });
+    return fallbackResponse;
+  }
+
+  if (usedContentScriptPath && response && response.success === true && !isKimiContentScriptSendConfirmed(response)) {
+    const fallbackResponse = await sendMessageToKimiViaDebugger(tab.id, message);
+    await recordKimiSendDiagnostic(tab, {
+      path: 'debugger-fallback-used',
+      trigger: 'content-script-unconfirmed',
+      success: Boolean(fallbackResponse?.success),
+      error: fallbackResponse?.error,
+      originalResponse: response
+    });
+    return fallbackResponse;
   }
 
   if (usedContentScriptPath && response && response.success === true) {
-    const verified = await verifyKimiContentScriptSend(tab.id, kimiResponseBaseline);
-    if (!verified) {
-      return await sendMessageToKimiViaDebugger(tab.id, message);
-    }
+    await recordKimiSendDiagnostic(tab, {
+      path: 'content-script-confirmed',
+      trigger: 'content-script-success',
+      success: true,
+      sendVerification: response.sendVerification
+    });
   }
 
   return response;
 }
 
-function isKimiContentScriptSendAccepted(baselineState, currentState) {
-  if (!currentState) {
-    return false;
-  }
-
-  if (currentState.streamingActive) {
-    return true;
-  }
-
-  return isNewKimiVerificationContent(baselineState, currentState);
+function isKimiContentScriptSendConfirmed(response) {
+  return Boolean(
+    response &&
+    response.success === true &&
+    response.sendVerification &&
+    response.sendVerification.observed === true
+  );
 }
 
-async function verifyKimiContentScriptSend(tabId, baselineState, maxAttempts = 8) {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (attempt > 0) {
-      await sleep(400);
-    }
+async function recordKimiSendDiagnostic(tab, details = {}) {
+  const diagnostic = {
+    aiType: 'kimi',
+    path: details.path || 'unknown',
+    trigger: details.trigger,
+    success: Boolean(details.success),
+    error: details.error,
+    sendVerification: details.sendVerification,
+    originalResponse: details.originalResponse,
+    tabId: tab?.id,
+    url: tab?.url,
+    updatedAt: Date.now()
+  };
 
-    try {
-      const state = await getKimiVerificationState(tabId);
-      if (isKimiContentScriptSendAccepted(baselineState, state)) {
-        return true;
-      }
-    } catch (_err) {
-      return false;
-    }
-  }
-  return false;
-}
-
-async function getKimiVerificationState(tabId) {
-  return await chrome.tabs.sendMessage(tabId, {
-    type: 'GET_LATEST_RESPONSE'
-  });
-}
-
-function isNewKimiVerificationContent(baselineState, currentState) {
-  if (!currentState || currentState.captureState !== 'complete') {
-    return false;
-  }
-
-  const currentContent = String(currentState.content || '').trim();
-  if (!currentContent) {
-    return false;
-  }
-
-  const baselineContent = String(baselineState?.content || '').trim();
-  return currentContent !== baselineContent;
+  await chrome.storage.session.set({ kimiSendDiagnostic: diagnostic });
+  notifySidePanel('KIMI_SEND_DIAGNOSTIC', diagnostic);
+  return diagnostic;
 }
 
 async function sendMessageToContentScript(tabId, message) {

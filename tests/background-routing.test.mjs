@@ -161,7 +161,14 @@ function createKimiSendMessageStub(response = { success: true }) {
     if (payload.type === 'GET_LATEST_RESPONSE') {
       return { streamingActive: true, captureState: 'streaming', content: '' };
     }
-    return response;
+    return {
+      success: true,
+      sendVerification: {
+        observed: true,
+        reason: 'streaming-started'
+      },
+      ...response
+    };
   };
 }
 
@@ -482,7 +489,13 @@ test('background retries content-script kimi send after tab finishes loading ins
         listeners.onUpdated?.(10, { status: 'complete' }, currentTab);
         throw new Error('Could not establish connection. Receiving end does not exist.');
       }
-      return { success: true };
+      return {
+        success: true,
+        sendVerification: {
+          observed: true,
+          reason: 'streaming-started'
+        }
+      };
     },
     attachDebugger(target, version) {
       debuggerTargets.push({ type: 'attach', target, version });
@@ -619,29 +632,10 @@ test('background accepts kimi homepage new-chat tab when no chat route exists ye
   assert.equal(response.success, true, JSON.stringify(response));
 });
 
-test('background falls back to debugger when kimi verification only sees stale completed content', async () => {
+test('background does not fall back to debugger when kimi content script already confirmed the send', async () => {
   const debuggerCalls = [];
   const debuggerTargets = [];
   let messageCount = 0;
-  const runtimeResults = [
-    { x: 220, y: 680 },
-    {
-      inputText: 'reply with KIMI only',
-      sendDisabled: false,
-      stopVisible: false,
-      userTurnCount: 1,
-      assistantTurnCount: 1,
-      lastAssistantText: '旧回复'
-    },
-    {
-      inputText: '',
-      sendDisabled: true,
-      stopVisible: true,
-      userTurnCount: 2,
-      assistantTurnCount: 1,
-      lastAssistantText: '旧回复'
-    }
-  ];
 
   const api = loadBackground({}, {
     tabs: [
@@ -652,16 +646,19 @@ test('background falls back to debugger when kimi verification only sees stale c
         return { streamingActive: false, captureState: 'complete', content: '旧回复' };
       }
       messageCount += 1;
-      return { success: true };
+      return {
+        success: true,
+        sendVerification: {
+          observed: true,
+          reason: 'user-message-added'
+        }
+      };
     },
     attachDebugger(target, version) {
       debuggerTargets.push({ type: 'attach', target, version });
     },
     sendDebuggerCommand(target, method, params) {
       debuggerCalls.push({ target, method, params });
-      if (method === 'Runtime.evaluate') {
-        return { result: { value: runtimeResults.shift() ?? null } };
-      }
       return {};
     },
     detachDebugger(target) {
@@ -673,6 +670,47 @@ test('background falls back to debugger when kimi verification only sees stale c
 
   assert.equal(messageCount, 1, JSON.stringify({ response, messageCount, debuggerTargets, debuggerCalls }));
   assert.equal(response.success, true, JSON.stringify({ response, debuggerTargets, debuggerCalls }));
-  assert.equal(debuggerTargets[0]?.type, 'attach', JSON.stringify({ response, debuggerTargets, debuggerCalls }));
-  assert.equal(debuggerCalls.some((call) => call.method === 'Input.dispatchKeyEvent' && call.params?.key === 'Enter'), true);
+  assert.equal(response.sendVerification?.observed, true, JSON.stringify({ response }));
+  assert.equal(response.sendVerification?.reason, 'user-message-added', JSON.stringify({ response }));
+  assert.equal(debuggerTargets.length, 0, JSON.stringify({ response, debuggerTargets, debuggerCalls }));
+  assert.equal(debuggerCalls.length, 0, JSON.stringify({ response, debuggerTargets, debuggerCalls }));
+});
+
+test('background stores and forwards kimi send diagnostics for confirmed content-script sends', async () => {
+  const sessionState = {};
+  const forwardedMessages = [];
+  const api = loadBackground(sessionState, {
+    tabs: [
+      { id: 10, url: 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat' }
+    ],
+    async sendMessage(_tabId, payload) {
+      assert.equal(payload.type, 'INJECT_MESSAGE');
+      return {
+        success: true,
+        sendVerification: {
+          observed: true,
+          reason: 'user-message-added'
+        }
+      };
+    },
+    runtimeSendMessage(message) {
+      forwardedMessages.push(message);
+    }
+  });
+
+  const response = await api.sendMessageToAI('kimi', 'reply with KIMI only');
+
+  assert.equal(response.success, true);
+  assert.equal(sessionState.kimiSendDiagnostic.aiType, 'kimi');
+  assert.equal(sessionState.kimiSendDiagnostic.path, 'content-script-confirmed');
+  assert.equal(sessionState.kimiSendDiagnostic.sendVerification.reason, 'user-message-added');
+  assert.equal(sessionState.kimiSendDiagnostic.url, 'https://www.kimi.com/chat/abc123?chat_enter_method=new_chat');
+  assert.equal(
+    forwardedMessages.some((message) =>
+      message.type === 'KIMI_SEND_DIAGNOSTIC' &&
+      message.path === 'content-script-confirmed' &&
+      message.sendVerification?.reason === 'user-message-added'
+    ),
+    true
+  );
 });

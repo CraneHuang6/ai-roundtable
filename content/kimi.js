@@ -26,7 +26,7 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'INJECT_MESSAGE') {
       injectMessage(message.message)
-        .then(() => sendResponse({ success: true }))
+        .then((result) => sendResponse(result))
         .catch(err => sendResponse({ success: false, error: err.message }));
       return true;
     }
@@ -173,33 +173,51 @@
     //   1. Input cleared (text left the input field)
     //   2. Streaming started (stop button appeared)
     //   3. New user message appeared in the chat
-    const sent = await verifySendSuccess(inputEl, text, 3000, baselineUserMessageCount);
-    if (!sent) {
+    const sendVerification = await verifySendSuccess(inputEl, text, 3000, baselineUserMessageCount);
+    if (!sendVerification) {
       throw new Error('Message was not sent — controlled editor may have rejected the input');
     }
 
     waitForStreamingComplete();
-    return true;
+    return {
+      success: true,
+      sendVerification
+    };
   }
 
   async function verifySendSuccess(inputEl, text, timeoutMs, baselineUserMessageCount) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
       if (isStreamingActive()) {
-        return true;
+        return {
+          observed: true,
+          reason: 'streaming-started'
+        };
       }
       if (didMessageLeaveInput(inputEl, text)) {
         // Input cleared — double-check with a short settle window because
         // controlled editors may briefly clear then revert.
         await sleep(300);
-        if (didMessageLeaveInput(inputEl, text) || isStreamingActive()) {
-          return true;
+        if (isStreamingActive()) {
+          return {
+            observed: true,
+            reason: 'streaming-started'
+          };
+        }
+        if (didMessageLeaveInput(inputEl, text)) {
+          return {
+            observed: true,
+            reason: 'input-cleared'
+          };
         }
         // Input reverted — the editor rejected the DOM-level text injection.
         return false;
       }
       if (hasNewUserMessage(baselineUserMessageCount)) {
-        return true;
+        return {
+          observed: true,
+          reason: 'user-message-added'
+        };
       }
       await sleep(200);
     }
@@ -367,14 +385,7 @@
       const messages = Array.from(document.querySelectorAll(selector));
       for (let i = messages.length - 1; i >= 0; i--) {
         const message = messages[i];
-        const richContent = message.querySelector?.('.markdown, .markdown-container');
-        const content = (
-          richContent?.innerText ||
-          richContent?.textContent ||
-          message.innerText ||
-          message.textContent ||
-          ''
-        ).trim();
+        const content = extractKimiAssistantText(message);
         if (content) {
           return content;
         }
@@ -382,6 +393,181 @@
     }
 
     return null;
+  }
+
+  function extractKimiAssistantText(message) {
+    const contentNodes = getKimiContentCandidates(message);
+    const candidateTexts = [];
+
+    for (const node of contentNodes) {
+      if (isKimiThinkingNode(node) || hasKimiThinkingAncestor(node, message)) {
+        continue;
+      }
+
+      const content = getNodeText(node);
+      if (isMeaningfulKimiResponseContent(content)) {
+        candidateTexts.push(content);
+      }
+    }
+
+    if (candidateTexts.length > 0) {
+      return candidateTexts[candidateTexts.length - 1];
+    }
+
+    const prunedContent = collectKimiTextOutsideThinking(message, message);
+    if (isMeaningfulKimiResponseContent(prunedContent)) {
+      return prunedContent;
+    }
+
+    const fallbackContent = getNodeText(message);
+    if (fallbackContent) {
+      return fallbackContent;
+    }
+
+    return null;
+  }
+
+  function getKimiContentCandidates(message) {
+    const selectors = [
+      '.markdown',
+      '.markdown-container',
+      '[class*="markdown"]',
+      '[data-testid*="answer"]',
+      '[data-testid*="response"]',
+      '[data-testid*="content"]',
+      '[class*="answer"]',
+      '[class*="response-content"]',
+      '[class*="message-content"]'
+    ];
+    const seen = new Set();
+    const candidates = [];
+
+    for (const selector of selectors) {
+      const nodes = Array.from(message.querySelectorAll?.(selector) || []);
+      for (const node of nodes) {
+        if (!node || seen.has(node)) {
+          continue;
+        }
+        seen.add(node);
+        candidates.push(node);
+      }
+    }
+
+    return candidates;
+  }
+
+  function collectKimiTextOutsideThinking(node, boundary) {
+    if (!node || node !== boundary && (isKimiThinkingNode(node) || hasKimiThinkingAncestor(node, boundary))) {
+      return '';
+    }
+
+    const children = Array.from(node.children || []);
+    if (children.length > 0) {
+      const childText = children
+        .map((child) => collectKimiTextOutsideThinking(child, boundary))
+        .filter(Boolean)
+        .join('\n');
+
+      if (childText.trim()) {
+        return normalizeKimiContent(childText);
+      }
+    }
+
+    return getNodeText(node);
+  }
+
+  function isKimiThinkingNode(node) {
+    if (!node) {
+      return false;
+    }
+
+    const markerText = [
+      getNodeClassName(node),
+      node.getAttribute?.('class'),
+      node.getAttribute?.('data-testid'),
+      node.getAttribute?.('data-test-id'),
+      node.getAttribute?.('aria-label'),
+      node.getAttribute?.('role')
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (/(thinking|reason|reasoning|thought|chain-of-thought|cot|analysis|analyzing|思考|推理|思考过程|深度思考|分析中)/i.test(markerText)) {
+      return true;
+    }
+
+    return looksLikeKimiThinkingText(getNodeText(node));
+  }
+
+  function hasKimiThinkingAncestor(node, boundary) {
+    let current = getParentNode(node);
+    while (current && current !== boundary) {
+      if (isKimiThinkingNode(current)) {
+        return true;
+      }
+      current = getParentNode(current);
+    }
+    return false;
+  }
+
+  function getParentNode(node) {
+    return node?.parentElement || node?.parentNode || node?.parent || null;
+  }
+
+  function getNodeClassName(node) {
+    const className = node?.className;
+    if (typeof className === 'string') {
+      return className;
+    }
+    if (className && typeof className.baseVal === 'string') {
+      return className.baseVal;
+    }
+    return '';
+  }
+
+  function getNodeText(node) {
+    return normalizeKimiContent(
+      node?.innerText ||
+      node?.textContent ||
+      ''
+    );
+  }
+
+  function normalizeKimiContent(content) {
+    return String(content || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function isMeaningfulKimiResponseContent(content) {
+    const normalized = normalizeKimiContent(content);
+    return Boolean(normalized) && !looksLikeKimiThinkingText(normalized);
+  }
+
+  function looksLikeKimiThinkingText(content) {
+    const normalized = normalizeKimiContent(content);
+    if (!normalized) {
+      return false;
+    }
+
+    if (/^(思考|推理|分析中|思考过程)/.test(normalized)) {
+      return true;
+    }
+
+    const markers = [
+      /^用户(分享|背景|希望|提供|问|想)/,
+      /用户背景[:：]/,
+      /文章核心观点[:：]/,
+      /我应该[:：]/,
+      /不需要使用工具/,
+      /让我(构建|分析|整理)/,
+      /用户偏好[:：]/
+    ];
+    const markerCount = markers.reduce((count, pattern) => count + (pattern.test(normalized) ? 1 : 0), 0);
+
+    return markerCount >= 2;
   }
 
   async function waitForStreamingComplete() {

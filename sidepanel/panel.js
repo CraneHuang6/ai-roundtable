@@ -372,6 +372,10 @@ function setupEventListeners() {
       } else {
         log(`${message.aiType}: Failed - ${message.error}`, 'error');
       }
+    } else if (message.type === 'KIMI_SEND_DIAGNOSTIC') {
+      const reason = message.sendVerification?.reason ? ` (${message.sendVerification.reason})` : '';
+      const logType = message.path === 'content-script-confirmed' ? 'success' : 'error';
+      log(`Kimi send path: ${message.path}${reason}`, logType);
     }
   });
 }
