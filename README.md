@@ -155,8 +155,9 @@ I'm currently most satisfied with, and calibrated to, the **web chat experience*
 
 **Kimi 发送稳定性说明**
 - 扩展会优先复用现有 Kimi 会话；如果当前还停在 `new_chat` 首页入口，也会继续尝试把消息发出去
-- 发送后不会只因页面上已有旧回复就误判成功，而是继续检查是否真的开始流式回复，或是否出现了新的回复状态
-- 如果 Kimi 的受控编辑器吞掉了 DOM 注入但页面没有真正开始回复，后台会自动回退到 debugger 路径再补发一次
+- 发送后不会只因页面上已有旧回复就误判成功，而是由内容脚本返回 `sendVerification`，确认输入已离开编辑器、开始流式回复，或出现新的用户消息
+- 如果 Kimi 的受控编辑器吞掉了 DOM 注入，后台会自动回退到 debugger 路径再补发一次；侧边栏会记录 Kimi 实际使用的发送路径
+- Kimi 回复抓取会跳过思考 / 推理区域，讨论模式保存的是最终回答正文
 
 **Grok 接入说明**
 - Grok 已作为标准 provider 接入普通模式、`/mutual`、`/cross` 和讨论模式
@@ -295,11 +296,18 @@ ai-roundtable/
 - 依赖各 AI 平台的 DOM 结构，平台更新可能导致功能失效
 - 不支持 Claude Artifacts、ChatGPT Canvas 等特殊功能
 - **Gemini、豆包、千问、Kimi、Grok 不支持自动文件上传** - 本轮接入仅支持文本发送与回复捕获；若带文件发送，系统会跳过这些 provider，并继续向支持文件上传的 provider 发送
-- Kimi 的文本发送虽然已补上首页入口回退、受控编辑器验证和 debugger 重试，但底层仍然依赖网页 DOM 与浏览器调试能力，后续若 Kimi 大改前端结构，相关链路仍可能再次漂移
+- Kimi 的文本发送和最终回答抓取虽然已补上受控编辑器验证、debugger 重试、发送路径诊断和思考区过滤，但底层仍然依赖网页 DOM 与浏览器调试能力，后续若 Kimi 大改前端结构，相关链路仍可能再次漂移
 
 ---
 
 ## 更新日志 / Changelog
+
+### v0.1.44
+
+- Kimi 内容脚本发送成功后会返回结构化 `sendVerification`，后台只在未确认发送时回退到 debugger，避免已发送消息被二次补发
+- 侧边栏会显示 Kimi 发送路径诊断，便于区分 content script 成功、debugger fallback 和真实发送失败
+- Kimi 回复抓取会过滤 thinking / reasoning / 思考过程区域；讨论模式保存最终回答正文，而不是中间推理文本
+- 回归测试新增 Kimi 思考块过滤、发送确认诊断和讨论收口相关覆盖；真实 Chrome 验证已确认 Kimi 讨论模式 history 写入最终 marker 文本
 
 ### v0.1.40
 

@@ -154,6 +154,9 @@ Provider-specific notes:
 - Gemini message injection - 文本设置后需触发多个事件（input, change, keydown, keyup）并延长等待时间（300ms）以确保发送按钮启用。添加 Ctrl+Enter 键盘快捷键作为备选发送方式。
 - Gemini background-tab response extraction - `content/gemini.js` 抓取最新回复时优先 `innerText`，但必须回退到 `textContent`；后台标签页里 `innerText` 可能为空或卡住，导致 summary 一直等到切回标签页才完成。
 - Qianwen controlled-editor send verification - 千问这类受控编辑器里，DOM 写入成功不等于真实可发送；发送按钮可能在输入事件后异步启用，提交成功也不能只看“按钮找到了/点到了”或 page-context handler 返回成功，必须再验证发送后状态变化（如输入区内容变化、stop/streaming signal 出现、会话进入新状态）。
+- Kimi controlled-editor send confirmation - `content/kimi.js` 的 `INJECT_MESSAGE` 必须返回 `{ success: true, sendVerification }`，其中 `sendVerification.observed === true` 且 reason 类似 `streaming-started` / `input-cleared` / `user-message-added` 才算内容脚本确认成功；`background.js` 只在未确认时 fallback 到 debugger，不再用“旧 assistant 回复没变”否决已确认发送。
+- Kimi send diagnostics - Kimi 发送路径会写入 `chrome.storage.session.kimiSendDiagnostic` 并向 side panel 发送 `KIMI_SEND_DIAGNOSTIC`；排查“点了发送但是否真的发出”时先看这个诊断，而不是只看页面是否出现旧回复。
+- Kimi final-answer capture - Kimi 回复抓取必须过滤 thinking / reasoning / 思考过程区域；如果讨论模式里 Kimi 只保存了“用户背景 / 我应该 / 不需要使用工具”等推理文本，优先修 `content/kimi.js` 的 `extractKimiAssistantText()` / `isKimiThinkingNode()`，并补 `tests/kimi-capture.test.mjs`，不要先改 discussion 收口。
 - Sidepanel response closure ownership - 对 normal send、discussion 这类需要“等待新回复”的 sidepanel 流程，发送前先抓每个 AI 的 baseline，再用 pending 集合 + pull polling 收口；不要把发送前缓存的旧回复当成新结果，也不要把收口完全压在 provider push 上。
 - Shared polling helper - 当 normal mode 与 discussion mode 都依赖 baseline-driven polling 时，优先扩展 `createPollingController()` / `captureResponseBaselines()` / `startResponsePolling()` 这类共享 helper，不要再复制第二套 timer/baseline 状态机。
 - Panel session version parity - 若 `panelSession` 这类 sidepanel 快照通过 `version` 防 stale write，则 `PANEL_STATE_CLEAR` / reset 路径也必须传并校验 version；只守 `set` 不守 `clear`，旧的 panel close/reset 会把更新的快照误清掉。
